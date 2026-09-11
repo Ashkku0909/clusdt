@@ -1,0 +1,16 @@
+# Secrets（絕對不要提交）
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 執行期狀態與紀錄
+data/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

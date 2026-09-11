@@ -1,0 +1,30 @@
+# Render Blueprint（Free Web Service）
+# 使用方式：Render Dashboard → New → Blueprint → 連接本 Repo，即自動建立服務。
+# 注意：免費方案閒置 15 分鐘會休眠，請以 UptimeRobot 定時 ping `/health` 保持喚醒。
+services:
+  - type: web
+    name: clusdt-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.9
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: FINNHUB_API_KEY
+        sync: false
+      - key: MARKETAUX_API_KEY
+        sync: false
+      - key: NEWS_MAX_AGE_MINUTES
+        value: "20"
+      - key: FLOW_VOL_RATIO
+        value: "1.5"
+      - key: FLOW_MOVE_PCT
+        value: "1.5"
+      - key: LOOP_INTERVAL_SECONDS
+        value: "300"
