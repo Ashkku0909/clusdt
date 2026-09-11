@@ -91,12 +91,12 @@ async def _lifespan(_app: FastAPI):
 app = FastAPI(title="clusdt crude oil bot", lifespan=_lifespan)
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def root() -> dict:
     return {"status": "ok"}
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health() -> dict:
     return {"status": "ok"}
 
