@@ -68,11 +68,18 @@ class Config:
     article_paragraph_limit: int = 3
     translate_target: str = "zh-TW"
     marketaux_min_interval_sec: int = 1800
-    # 盤中資金流（純數據）
-    flow_volume_ratio: float = 1.5
-    flow_move_alert_pct: float = 1.5
-    flow_candle_interval: str = "5m"
-    flow_alert_cooldown_sec: int = 900
+    # Binance 即時訂單流（唯一權威市場資料源；零 LLM）
+    binance_symbol: str = "CLUSDT"
+    orderflow_block_usd: float = 500_000.0
+    orderflow_window_usd: float = 1_000_000.0
+    orderflow_window_sec: int = 15
+    orderflow_sr_proximity_pct: float = 0.3
+    orderflow_atr_period: int = 14
+    orderflow_atr_mult: float = 1.5
+    orderflow_kline_interval: str = "15m"
+    orderflow_cooldown_sec: int = 60
+    orderflow_ta_refresh_sec: int = 300
+    # CFTC 週度籌碼
     cftc_flow_threshold: int = 0
     cftc_check_interval_sec: int = 1800
     data_dir: Path = DATA_DIR
@@ -115,10 +122,16 @@ def load_config() -> Config:
         article_paragraph_limit=_env_int("ARTICLE_PARAGRAPH_LIMIT", 3),
         translate_target=_env("TRANSLATE_TARGET", "zh-TW"),
         marketaux_min_interval_sec=_env_int("MARKETAUX_MIN_INTERVAL_SEC", 1800),
-        flow_volume_ratio=_env_float("FLOW_VOL_RATIO", 1.5),
-        flow_move_alert_pct=_env_float("FLOW_MOVE_PCT", 1.5),
-        flow_candle_interval=_env("FLOW_CANDLE_INTERVAL", "5m"),
-        flow_alert_cooldown_sec=_env_int("FLOW_ALERT_COOLDOWN_SEC", 900),
+        binance_symbol=_env("BINANCE_SYMBOL", "CLUSDT").upper(),
+        orderflow_block_usd=_env_float("ORDERFLOW_BLOCK_USD", 500_000.0),
+        orderflow_window_usd=_env_float("ORDERFLOW_WINDOW_USD", 1_000_000.0),
+        orderflow_window_sec=_env_int("ORDERFLOW_WINDOW_SEC", 15),
+        orderflow_sr_proximity_pct=_env_float("ORDERFLOW_SR_PROXIMITY_PCT", 0.3),
+        orderflow_atr_period=_env_int("ORDERFLOW_ATR_PERIOD", 14),
+        orderflow_atr_mult=_env_float("ORDERFLOW_ATR_MULT", 1.5),
+        orderflow_kline_interval=_env("ORDERFLOW_KLINE_INTERVAL", "15m"),
+        orderflow_cooldown_sec=_env_int("ORDERFLOW_COOLDOWN_SEC", 60),
+        orderflow_ta_refresh_sec=_env_int("ORDERFLOW_TA_REFRESH_SEC", 300),
         cftc_flow_threshold=_env_int("CFTC_FLOW_THRESHOLD", 0),
         cftc_check_interval_sec=_env_int("CFTC_CHECK_INTERVAL_SEC", 1800),
     )

@@ -7,11 +7,13 @@
 - `06765T` BRENT LAST DAY - NEW YORK MERCANTILE EXCHANGE（對應 BZ=F）
 
 週度資金流轉折判定：|Δ 淨持倉| > 門檻（預設 10,000 口）。
+本模組同時提供 `run_cftc_cycle()` 推播週期（固定模板、零 LLM）。
 """
 
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 
 import requests
@@ -167,3 +169,89 @@ def get_positions(cfg: Config) -> dict[str, CftcPosition]:
             log.warning("CFTC %s 市場名稱不符預期：%s", meta["label"], position.market)
         result[symbol] = position
     return result
+
+
+# --------------------------------------------------------------------- #
+# 週報推播週期（固定模板、零 LLM）
+# --------------------------------------------------------------------- #
+CFTC_FLAG = "cftc:last_report:CL=F"
+CFTC_CHECK_FLAG = "cftc:last_check_ts"
+
+
+def _flag_float(value) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _signed(value: int | None) -> str:
+    return f"{value:+,}" if value is not None else "—"
+
+
+def format_cftc_alert(position: CftcPosition) -> str:
+    oi_line = (
+        f"📦 **總 OI**: {position.open_interest:,} 口（週變 {_signed(position.oi_change)}）"
+        if position.open_interest is not None
+        else "📦 **總 OI**: —"
+    )
+    return "\n".join(
+        [
+            "🚨 **【NYMEX 原油期貨 資金異動警報】**",
+            "━━━━━━━━━━━━━━━━━━",
+            "📊 **標的**: CFTC 週報｜Managed Money｜NYMEX WTI (067651)",
+            f"🧭 **淨持倉**: {position.mm_net:,} 口（週變 {_signed(position.mm_net_change)}）",
+            f"📈 **多單**: {position.mm_long:,}（週變 {_signed(position.mm_long_change)}）",
+            f"📉 **空單**: {position.mm_short:,}（週變 {_signed(position.mm_short_change)}）",
+            oi_line,
+            f"🗓 **報告日**: {position.report_date}",
+            "━━━━━━━━━━━━━━━━━━",
+        ]
+    )
+
+
+def run_cftc_cycle(cfg, dispatcher, state, dry_run: bool = False, force: bool = False) -> int:
+    """檢查 CFTC 週報（僅 NYMEX WTI，067651）；新報告才推播。"""
+    try:
+        positions = get_positions(cfg)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("CFTC 取得失敗：%s", exc)
+        return 0
+    position = positions.get("CL=F")
+    if position is None:
+        log.warning("CFTC：無 WTI 持倉資料")
+        return 0
+
+    if not dry_run:
+        state.update_flags({CFTC_CHECK_FLAG: str(time.time())})
+
+    flags = state.get_flags()
+    last_check = _flag_float(flags.get(CFTC_CHECK_FLAG))
+    if not force and last_check and (time.time() - last_check) < cfg.cftc_check_interval_sec:
+        log.info("CFTC：距上次檢查 %.0f 秒 < %d 秒，略過", time.time() - last_check, cfg.cftc_check_interval_sec)
+        return 0
+
+    is_new = str(flags.get(CFTC_FLAG, "")) != position.report_date
+    change = position.mm_net_change
+
+    if not force:
+        if not is_new:
+            log.info("CFTC：已處理（報告日 %s）", position.report_date)
+            return 0
+        if cfg.cftc_flow_threshold > 0 and (change is None or abs(change) < cfg.cftc_flow_threshold):
+            log.info(
+                "CFTC：週變 %s 未達門檻（%s 口），僅記錄進度",
+                _signed(change),
+                f"{cfg.cftc_flow_threshold:,}",
+            )
+            if not dry_run:
+                state.update_flags({CFTC_FLAG: position.report_date})
+            return 0
+
+    log.info("CFTC：%s 觸發推播（淨持倉 %s 口，週變 %s）", position.report_date, f"{position.mm_net:,}", _signed(change))
+    alert = format_cftc_alert(position)
+    if dispatcher.send_alert(alert, dry_run=dry_run):
+        if not dry_run:
+            state.update_flags({CFTC_FLAG: position.report_date})
+        return 1
+    return 0

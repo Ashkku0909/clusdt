@@ -6,8 +6,8 @@ import time
 
 import feedparser
 import requests
-import yfinance as yf
 
+from binance_orderflow import fetch_atr, fetch_snapshot, resolve_symbol
 from config import Config
 from news_sources import ALJAZEERA_RSS_URLS, DEFAULT_HEADERS, is_aljazeera_relevant
 
@@ -30,13 +30,18 @@ def _check_telegram(cfg: Config) -> str:
     return f"@{username}（{transport}）"
 
 
-def _check_yfinance(cfg: Config) -> str:
-    ticker = yf.Ticker("CL=F")
-    hist = ticker.history(period="1d", interval=cfg.flow_candle_interval, auto_adjust=False)
-    if hist is None or hist.empty:
-        raise RuntimeError("CL=F 無 K 線資料")
-    last = hist.iloc[-1]
-    return f"CL=F {cfg.flow_candle_interval} K 線正常：{len(hist)} 筆，最近收盤 {float(last['Close']):.2f}"
+def _check_binance(cfg: Config) -> str:
+    """Binance USDT-M：確認合約存在、24h ticker 與 15m ATR 皆可取得。"""
+    session = requests.Session()
+    symbol = resolve_symbol(session, cfg.binance_symbol)
+    snapshot = fetch_snapshot(session, symbol)
+    atr = fetch_atr(session, symbol, cfg.orderflow_kline_interval, cfg.orderflow_atr_period)
+    return (
+        f"{symbol} 現價 ${snapshot.last_price:,.2f}"
+        f"｜24h {snapshot.low_24h:,.2f}–{snapshot.high_24h:,.2f}"
+        f"｜ATR({cfg.orderflow_kline_interval},{cfg.orderflow_atr_period}) ${atr:,.2f}"
+        f"｜24h 成交額 ${snapshot.quote_volume_24h:,.0f}"
+    )
 
 
 def _check_marketaux(cfg: Config) -> str:
@@ -94,7 +99,7 @@ def _check_aljazeera(cfg: Config) -> str:
 def run_health(cfg: Config) -> int:
     checks = [
         ("Telegram", _check_telegram, True),
-        ("yfinance", _check_yfinance, False),
+        ("Binance", _check_binance, False),
         ("Marketaux", _check_marketaux, False),
         ("Finnhub", _check_finnhub, False),
         ("AlJazeera", _check_aljazeera, False),
@@ -119,6 +124,12 @@ def run_health(cfg: Config) -> int:
         f"⚙️  Telegram 代理: {cfg.telegram_proxy_url or '直連'}"
         f"｜資料代理: {cfg.data_proxy_url or '直連'}"
         f"｜新聞時效窗: {cfg.news_max_age_minutes} 分鐘｜每輪上限: {cfg.max_alerts_per_run} 則"
+    )
+    print(
+        f"🛢  訂單流門檻: 單筆 >= ${cfg.orderflow_block_usd:,.0f}"
+        f"｜{cfg.orderflow_window_sec}s 同向 >= ${cfg.orderflow_window_usd:,.0f}"
+        f"｜關鍵位 ±{cfg.orderflow_sr_proximity_pct:.2f}%｜止損 {cfg.orderflow_atr_mult:g}×ATR"
+        f"｜方向冷卻 {cfg.orderflow_cooldown_sec}s"
     )
     if required_failed:
         print("❌ 核心連線失敗：請檢查 .env 與網路／代理設定。")
