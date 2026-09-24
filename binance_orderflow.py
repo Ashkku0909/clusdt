@@ -26,8 +26,9 @@
 
 工程設計：
 - WebSocket 斷線自動重連（指數退避 5s → 10s → 20s → 40s → 60s 上限）
-- 24h 高低點與 ATR 每 ORDERFLOW_TA_REFRESH_SEC（預設 300s）以 REST 背景刷新，
-  阻塞式 HTTP 全部丟到 thread 執行，不阻塞事件迴圈、不中斷即時串流
+- 24h 高低點與 ATR 每 ORDERFLOW_TA_REFRESH_SEC（預設 300s）以 REST 背景刷新（to_thread）；
+  失敗僅指數退避重試（418/429 直接封鎖 1 小時），**絕不逐筆重試**，
+  行情基準超過 ORDERFLOW_SNAPSHOT_MAX_AGE_SEC（預設 1800s）自動停發新訊號
 - 每個方向獨立冷卻（預設 60s），外加全域最小警報間隔 ORDERFLOW_MIN_GAP_SEC（預設 300s）
   與同方向最小價格推移 ORDERFLOW_MIN_MOVE_PCT（預設 0.12%）——三層防刷頻
 - ``run_forever()`` 為 asyncio 任務，於 FastAPI lifespan 以 ``asyncio.create_task`` 常駐
@@ -39,6 +40,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -299,8 +301,13 @@ class OrderflowEngine:
         self.session = requests.Session()
         self.snapshot: MarketSnapshot | None = None
         self.atr: float | None = None
-        self._ta_refreshed_at = 0.0
+        self.snapshot_max_age_sec = float(cfg.orderflow_snapshot_max_age_sec)
         self._stopping = False
+        self._refresh_lock = threading.Lock()
+        self._next_refresh_at = 0.0  # 下一次一般刷新時間（單調鐘）
+        self._refresh_fail_until = 0.0  # 418/429 封鎖期間（單調鐘；強制刷新也須等）
+        self._refresh_failures = 0
+        self._last_stale_warn = 0.0
 
         # 15 秒滾動窗口（依 trade_time 剪枝，維持同方向名義金額累計）
         self._window: Deque[TradeEvent] = deque()
@@ -319,6 +326,7 @@ class OrderflowEngine:
             "suppressed_cooldown": 0,
             "suppressed_gap": 0,
             "suppressed_move": 0,
+            "suppressed_stale": 0,
             "max_single_notional": 0.0,
             "max_buy_flow": 0.0,
             "max_sell_flow": 0.0,
@@ -333,26 +341,58 @@ class OrderflowEngine:
         return self.symbol
 
     def refresh_market_data(self, force: bool = False) -> None:
-        """刷新 24h 高低點與 ATR；失敗時保留舊值（不中斷串流）。"""
+        """刷新 24h 高低點與 ATR（阻塞；請以 to_thread 呼叫）。
+
+        防 418 封鎖設計（絕不在每筆成交上重試）：
+        - 一般節流：距上次排程 < ORDERFLOW_TA_REFRESH_SEC 直接跳過
+        - 失敗退避：指數退避（最高 3600s）；418/429 → 硬封鎖 3600s，
+          連線重連的 force 刷新在此期間同樣跳過
+        - 非阻塞鎖：同時間只允許一個刷新在執行
+        """
         now = time.monotonic()
-        if not force and (now - self._ta_refreshed_at) < self.ta_refresh_sec:
+        if now < self._refresh_fail_until:
+            return  # 418/429 封鎖期間：一般與強制刷新皆暂停
+        if not force and now < self._next_refresh_at:
+            return
+        if not self._refresh_lock.acquire(blocking=False):
             return
         try:
-            self.snapshot = fetch_snapshot(self.session, self.symbol)
-            self.atr = fetch_atr(self.session, self.symbol, self.kline_interval, self.atr_period)
-            self._ta_refreshed_at = now
+            try:
+                snapshot = fetch_snapshot(self.session, self.symbol)
+                atr = fetch_atr(self.session, self.symbol, self.kline_interval, self.atr_period)
+            except Exception as exc:  # noqa: BLE001 - 保留舊基準繼續運作
+                self._refresh_failures += 1
+                message = str(exc)
+                banned = any(token in message for token in ("418", "429", "banned"))
+                if banned:
+                    self._refresh_fail_until = time.monotonic() + 3600.0
+                    delay = 3600.0
+                else:
+                    delay = min(self.ta_refresh_sec * (2 ** min(self._refresh_failures, 4)), 3600.0)
+                self._next_refresh_at = time.monotonic() + delay
+                log.warning(
+                    "行情基準刷新失敗（沿用舊值；%.0f 秒後再試，連續失敗 %d 次）：%s",
+                    delay,
+                    self._refresh_failures,
+                    exc,
+                )
+                return
+            self.snapshot = snapshot
+            self.atr = atr
+            self._refresh_failures = 0
+            self._next_refresh_at = time.monotonic() + self.ta_refresh_sec
             log.info(
                 "行情基準已更新：%s 現價 $%.2f｜24h %.2f–%.2f｜ATR(%s,%d) $%.2f",
                 self.symbol,
-                self.snapshot.last_price,
-                self.snapshot.low_24h,
-                self.snapshot.high_24h,
+                snapshot.last_price,
+                snapshot.low_24h,
+                snapshot.high_24h,
                 self.kline_interval,
                 self.atr_period,
-                self.atr,
+                atr,
             )
-        except Exception as exc:  # noqa: BLE001 - 保留舊基準繼續運作
-            log.warning("行情基準刷新失敗（沿用舊值）：%s", exc)
+        finally:
+            self._refresh_lock.release()
 
     # ------------------------------------------------------------------ #
     # 純邏輯：逐筆成交 → 訊號判斷（可離線單元測試）
@@ -391,6 +431,19 @@ class OrderflowEngine:
 
         if self.snapshot is None or self.atr is None or self.atr <= 0:
             log.warning("觸發大單但行情基準尚未就緒，略過本筆")
+            return None
+
+        # --- 基準過期保護（避免用過期關鍵位發訊）---
+        age = (datetime.now(timezone.utc) - self.snapshot.fetched_at).total_seconds()
+        if age > self.snapshot_max_age_sec:
+            self.stats["suppressed_stale"] += 1
+            if time.time() - self._last_stale_warn >= 300:
+                self._last_stale_warn = time.time()
+                log.warning(
+                    "行情基準已過期 %.0f 秒（> %d 秒），暫停發送新訊號",
+                    age,
+                    int(self.snapshot_max_age_sec),
+                )
             return None
 
         # --- 24h 高低點位置過濾（僅在關鍵位附近才發訊）---
@@ -521,7 +574,7 @@ class OrderflowEngine:
             async for raw in socket:
                 if self._stopping:
                     return
-                if (time.monotonic() - self._ta_refreshed_at) > self.ta_refresh_sec:
+                if time.monotonic() >= self._next_refresh_at:
                     await asyncio.to_thread(self.refresh_market_data, False)
                 try:
                     message = json.loads(raw)
@@ -564,7 +617,7 @@ class OrderflowEngine:
     def stats_line(self) -> str:
         return (
             "trades=%d｜單筆巨量=%d｜窗口觸發=%d｜訊號=%d"
-            "｜S/R 壓制=%d｜冷卻壓制=%d｜間隔壓制=%d｜同價壓制=%d"
+            "｜S/R 壓制=%d｜冷卻壓制=%d｜間隔壓制=%d｜同價壓制=%d｜過期壓制=%d"
             "｜單筆最大=$%.0f｜買峰=$%.0f｜賣峰=$%.0f"
             % (
                 self.stats["trades"],
@@ -575,6 +628,7 @@ class OrderflowEngine:
                 self.stats["suppressed_cooldown"],
                 self.stats["suppressed_gap"],
                 self.stats["suppressed_move"],
+                self.stats["suppressed_stale"],
                 self.stats["max_single_notional"],
                 self.stats["max_buy_flow"],
                 self.stats["max_sell_flow"],
@@ -691,7 +745,10 @@ def run_ws_test(cfg, seconds: float = 30.0, symbol: str | None = None) -> int:
 
     async def runner() -> OrderflowEngine:
         engine = OrderflowEngine(cfg, dispatcher=None, symbol=symbol, dry_run=True)
-        await asyncio.to_thread(engine.resolve)
+        try:
+            await asyncio.to_thread(engine.resolve)
+        except Exception as exc:  # noqa: BLE001 - 限流時沿用預設代碼
+            log.warning("合約代碼解析失敗（%s），沿用預設 %s", exc, engine.symbol)
         task = asyncio.create_task(engine.run_forever())
         try:
             await asyncio.sleep(seconds)

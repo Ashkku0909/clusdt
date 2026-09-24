@@ -81,6 +81,7 @@ class Config:
     orderflow_ta_refresh_sec: int = 300
     orderflow_min_gap_sec: int = 300
     orderflow_min_move_pct: float = 0.12
+    orderflow_snapshot_max_age_sec: int = 1800
     # CFTC 週度籌碼
     cftc_flow_threshold: int = 0
     cftc_check_interval_sec: int = 1800
@@ -136,6 +137,7 @@ def load_config() -> Config:
         orderflow_ta_refresh_sec=_env_int("ORDERFLOW_TA_REFRESH_SEC", 300),
         orderflow_min_gap_sec=_env_int("ORDERFLOW_MIN_GAP_SEC", 300),
         orderflow_min_move_pct=_env_float("ORDERFLOW_MIN_MOVE_PCT", 0.12),
+        orderflow_snapshot_max_age_sec=_env_int("ORDERFLOW_SNAPSHOT_MAX_AGE_SEC", 1800),
         cftc_flow_threshold=_env_int("CFTC_FLOW_THRESHOLD", 0),
         cftc_check_interval_sec=_env_int("CFTC_CHECK_INTERVAL_SEC", 1800),
     )

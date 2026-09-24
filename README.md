@@ -87,6 +87,7 @@ python -m venv .venv
 | `ORDERFLOW_COOLDOWN_SEC` | 每方向冷卻秒數（預設 60） |
 | `ORDERFLOW_MIN_GAP_SEC` | 全域最小警報間隔秒數（任何方向，預設 300；調大＝更安靜） |
 | `ORDERFLOW_MIN_MOVE_PCT` | 同方向再次警報所需最小價格推移 %（預設 0.12） |
+| `ORDERFLOW_SNAPSHOT_MAX_AGE_SEC` | 行情基準最大容忍年齡秒數（預設 1800；逾時暫停發訊） |
 | `ORDERFLOW_TA_REFRESH_SEC` | 24h 高低／ATR 刷新間隔（預設 300，秒） |
 | `LOOP_INTERVAL_SECONDS` | Render／`--serve` 背景輪詢間隔秒數（預設 300） |
 | `CFTC_FLOW_THRESHOLD` | CFTC 推播門檻（0 = 每次新報告都推播） |
@@ -151,7 +152,7 @@ python -m venv .venv
 | 性質 | 低點主動買／高點主動賣＝關鍵位強勢防守；其餘＝連續市價吃單 (主動做市主力) |
 | 止損 | 做多＝進場 − 1.5×ATR；做空＝進場 + 1.5×ATR（ATR14＝15m K 線 EMA(TR,14)） |
 | 防洗版 | 三層：每方向冷卻 `ORDERFLOW_COOLDOWN_SEC`（60s）＋全域最小間隔 `ORDERFLOW_MIN_GAP_SEC`（300s，任何方向）＋同方向最小價格推移 `ORDERFLOW_MIN_MOVE_PCT`（0.12%） |
-| 韌性 | WebSocket 斷線 Exponential Backoff 5s→60s；24h/ATR 每 300 秒 REST 背景刷新 |
+| 韌性 | WebSocket 斷線 Exponential Backoff 5s→60s；24h/ATR 每 300 秒 REST 背景刷新；REST 失敗指數退避（418/429 硬封鎖 1 小時、絕不逐筆重試）；基準逾時自動停發 |
 
 實際觀測（校準用）：CLUSDT 每秒約 21 筆、單筆 p99 ≈ $44k、單筆最大 ≈ $63k、
 15 秒窗口資金峰值 買 $694k／賣 $638k——因此 $500k／$1M 為「機構級」門檻，日常不誤報。

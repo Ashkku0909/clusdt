@@ -104,7 +104,11 @@ async def _start_orderflow_engine() -> None:
         return
     dispatcher = TelegramDispatcher(cfg.telegram_bot_token, cfg.telegram_chat_id, cfg.telegram_proxy_url)
     engine = OrderflowEngine(cfg, dispatcher)
-    symbol = await asyncio.to_thread(engine.resolve)
+    try:
+        symbol = await asyncio.to_thread(engine.resolve)
+    except Exception as exc:  # noqa: BLE001 - 限流時沿用預設代碼，稍後自動重試
+        symbol = engine.symbol
+        log.warning("合約代碼解析失敗（%s），沿用預設 %s，稍後自動重試", exc, symbol)
     _engine_task = asyncio.create_task(engine.run_forever(), name="binance-orderflow")
     log.info(
         "訂單流引擎已啟動：%s（單筆 >= $%s｜%d 秒同向 >= $%s）",

@@ -40,5 +40,9 @@ services:
         value: "300"
       - key: ORDERFLOW_MIN_MOVE_PCT
         value: "0.12"
+      - key: ORDERFLOW_SNAPSHOT_MAX_AGE_SEC
+        value: "1800"
+      - key: LOG_LEVEL
+        value: "INFO"
       - key: LOOP_INTERVAL_SECONDS
         value: "300"
