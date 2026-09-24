@@ -58,6 +58,9 @@ FALLBACK_BASE_ASSETS: tuple[str, ...] = ("CL", "OIL", "WTI", "BRENT", "CRUDE")
 
 DIRECTION_LABELS = {"long": "做多 🟢", "short": "做空 🔴"}
 
+# 開頭號誌燈（紅綠燈語意）：做多 = 綠燈 🟢、做空 = 紅燈 🔴
+DIRECTION_LIGHTS = {"long": "🟢", "short": "🔴"}
+
 NATURE_SWEEP = "連續市價吃單 (主動做市主力)"
 NATURE_DEFENSE = "關鍵位強勢防守"
 
@@ -233,7 +236,7 @@ def format_orderflow_alert(signal: OrderflowSignal) -> str:
     """依既定模板輸出警報（純文字，Telegram 端僅做 Markdown→HTML 轉義）。"""
     return "\n".join(
         [
-            "🚨 【幣安 CL原油 異動】",
+            f"{DIRECTION_LIGHTS[signal.direction]} 【幣安 CL原油 異動】",
             "━━━━━━━━━━━━━━━━━━",
             f"方向：{DIRECTION_LABELS[signal.direction]}",
             f"進場位：${signal.entry_price:,.2f}",

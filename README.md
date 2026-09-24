@@ -141,6 +141,7 @@ python -m venv .venv
 | --- | --- |
 | 資料串流 | `wss://fstream.binance.com/stream?streams=clusdt@trade`（逐筆成交，含 `m` 主動方向） |
 | 主動方向 | `m=False` → 主動買（做多 🟢）；`m=True` → 主動賣（做空 🔴） |
+| 開頭號誌燈 | 做多 = 綠燈 🟢；做空 = 紅燈 🔴（紅綠燈語意，一眼分辨 Call / Put） |
 | 觸發 A | 單筆吃單名義金額 >= `ORDERFLOW_BLOCK_USD`（預設 $500,000） |
 | 觸發 B | `ORDERFLOW_WINDOW_SEC` 秒（預設 15）內同向累計 >= `ORDERFLOW_WINDOW_USD`（預設 $1,000,000） |
 | 位置過濾 | 成交價需距 24h 高或低點 <= `ORDERFLOW_SR_PROXIMITY_PCT`（預設 0.3%），否則壓制 |
@@ -156,7 +157,7 @@ python -m venv .venv
 警報格式（固定模板）：
 
 ```
-🚨 【幣安 CL原油 異動】
+� 【幣安 CL原油 異動】
 ━━━━━━━━━━━━━━━━━━
 方向：做多 🟢
 進場位：$96.55
@@ -167,6 +168,8 @@ python -m venv .venv
 關鍵位置：測試前低支撐位 $95.89
 ━━━━━━━━━━━━━━━━━━
 ```
+
+> 開頭號誌燈隨方向自動切換（做多＝綠燈、做空＝紅燈）；實例：做空時為 `🔴 【幣安 CL原油 異動】`。
 
 > 注意：fapi 的 `@aggTrade` 串流目前對所有代碼皆無推送（ETHUSDT 對照組同樣靜默），
 > 而 `@trade` 逐筆推送且自帶相同語意的 `m` 欄位，故引擎以 `@trade` 為唯一來源。
