@@ -79,6 +79,8 @@ class Config:
     orderflow_kline_interval: str = "15m"
     orderflow_cooldown_sec: int = 60
     orderflow_ta_refresh_sec: int = 300
+    orderflow_min_gap_sec: int = 300
+    orderflow_min_move_pct: float = 0.12
     # CFTC 週度籌碼
     cftc_flow_threshold: int = 0
     cftc_check_interval_sec: int = 1800
@@ -132,6 +134,8 @@ def load_config() -> Config:
         orderflow_kline_interval=_env("ORDERFLOW_KLINE_INTERVAL", "15m"),
         orderflow_cooldown_sec=_env_int("ORDERFLOW_COOLDOWN_SEC", 60),
         orderflow_ta_refresh_sec=_env_int("ORDERFLOW_TA_REFRESH_SEC", 300),
+        orderflow_min_gap_sec=_env_int("ORDERFLOW_MIN_GAP_SEC", 300),
+        orderflow_min_move_pct=_env_float("ORDERFLOW_MIN_MOVE_PCT", 0.12),
         cftc_flow_threshold=_env_int("CFTC_FLOW_THRESHOLD", 0),
         cftc_check_interval_sec=_env_int("CFTC_CHECK_INTERVAL_SEC", 1800),
     )

@@ -85,6 +85,8 @@ python -m venv .venv
 | `ORDERFLOW_ATR_PERIOD` / `ORDERFLOW_ATR_MULT` | ATR 週期（預設 14）與止損倍數（預設 1.5） |
 | `ORDERFLOW_KLINE_INTERVAL` | ATR 計算 K 線週期（預設 `15m`） |
 | `ORDERFLOW_COOLDOWN_SEC` | 每方向冷卻秒數（預設 60） |
+| `ORDERFLOW_MIN_GAP_SEC` | 全域最小警報間隔秒數（任何方向，預設 300；調大＝更安靜） |
+| `ORDERFLOW_MIN_MOVE_PCT` | 同方向再次警報所需最小價格推移 %（預設 0.12） |
 | `ORDERFLOW_TA_REFRESH_SEC` | 24h 高低／ATR 刷新間隔（預設 300，秒） |
 | `LOOP_INTERVAL_SECONDS` | Render／`--serve` 背景輪詢間隔秒數（預設 300） |
 | `CFTC_FLOW_THRESHOLD` | CFTC 推播門檻（0 = 每次新報告都推播） |
@@ -145,10 +147,10 @@ python -m venv .venv
 | 觸發 A | 單筆吃單名義金額 >= `ORDERFLOW_BLOCK_USD`（預設 $500,000） |
 | 觸發 B | `ORDERFLOW_WINDOW_SEC` 秒（預設 15）內同向累計 >= `ORDERFLOW_WINDOW_USD`（預設 $1,000,000） |
 | 位置過濾 | 成交價需距 24h 高或低點 <= `ORDERFLOW_SR_PROXIMITY_PCT`（預設 0.3%），否則壓制 |
-| 關鍵位置 | 高＋買＝突破前高阻力位；高＋賣＝防禦前高阻力位；低＋買＝測試前低支撐位；低＋賣＝跌破前低支撐位 |
+| 關鍵位置 | 高＋買＝突破／測試前高阻力位（依進場價相對位置取詞）；高＋賣＝防禦前高阻力位；低＋買＝測試前低支撐位；低＋賣＝跌破／測試前低支撐位 |
 | 性質 | 低點主動買／高點主動賣＝關鍵位強勢防守；其餘＝連續市價吃單 (主動做市主力) |
 | 止損 | 做多＝進場 − 1.5×ATR；做空＝進場 + 1.5×ATR（ATR14＝15m K 線 EMA(TR,14)） |
-| 防洗版 | 每方向獨立冷卻 `ORDERFLOW_COOLDOWN_SEC`（預設 60 秒） |
+| 防洗版 | 三層：每方向冷卻 `ORDERFLOW_COOLDOWN_SEC`（60s）＋全域最小間隔 `ORDERFLOW_MIN_GAP_SEC`（300s，任何方向）＋同方向最小價格推移 `ORDERFLOW_MIN_MOVE_PCT`（0.12%） |
 | 韌性 | WebSocket 斷線 Exponential Backoff 5s→60s；24h/ATR 每 300 秒 REST 背景刷新 |
 
 實際觀測（校準用）：CLUSDT 每秒約 21 筆、單筆 p99 ≈ $44k、單筆最大 ≈ $63k、

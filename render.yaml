@@ -36,5 +36,9 @@ services:
         value: "1.5"
       - key: ORDERFLOW_COOLDOWN_SEC
         value: "60"
+      - key: ORDERFLOW_MIN_GAP_SEC
+        value: "300"
+      - key: ORDERFLOW_MIN_MOVE_PCT
+        value: "0.12"
       - key: LOOP_INTERVAL_SECONDS
         value: "300"

@@ -28,7 +28,8 @@
 - WebSocket 斷線自動重連（指數退避 5s → 10s → 20s → 40s → 60s 上限）
 - 24h 高低點與 ATR 每 ORDERFLOW_TA_REFRESH_SEC（預設 300s）以 REST 背景刷新，
   阻塞式 HTTP 全部丟到 thread 執行，不阻塞事件迴圈、不中斷即時串流
-- 每個方向獨立冷卻（預設 60s），防止同一波資金連續刷頻
+- 每個方向獨立冷卻（預設 60s），外加全域最小警報間隔 ORDERFLOW_MIN_GAP_SEC（預設 300s）
+  與同方向最小價格推移 ORDERFLOW_MIN_MOVE_PCT（預設 0.12%）——三層防刷頻
 - ``run_forever()`` 為 asyncio 任務，於 FastAPI lifespan 以 ``asyncio.create_task`` 常駐
 """
 
@@ -70,6 +71,21 @@ LEVEL_TEXT = {
     ("low", "long"): "測試前低支撐位 ${price:,.2f}",
     ("low", "short"): "跌破前低支撐位 ${price:,.2f}",
 }
+
+
+def _level_text(level_kind: str, direction: str, level_price: float, entry_price: float) -> str:
+    """關鍵位置文字（依進場價相對關鍵位的實際位置選詞，避免語意矛盾）。
+
+    - 高＋買：進場價 >= 高點 → 突破；在其下方 → 測試
+    - 低＋賣：進場價 <= 低點 → 跌破；在其上方 → 測試
+    """
+    if level_kind == "high" and direction == "long":
+        verb = "突破" if entry_price >= level_price else "測試"
+        return f"{verb}前高阻力位 ${level_price:,.2f}"
+    if level_kind == "low" and direction == "short":
+        verb = "跌破" if entry_price <= level_price else "測試"
+        return f"{verb}前低支撐位 ${level_price:,.2f}"
+    return LEVEL_TEXT[(level_kind, direction)].format(price=level_price)
 
 TRIGGER_LABELS = {"single_block": "單筆巨量吃單", "window_flow": "15 秒內同向連續吃單"}
 
@@ -274,6 +290,8 @@ class OrderflowEngine:
         self.kline_interval = cfg.orderflow_kline_interval
         self.cooldown_sec = float(cfg.orderflow_cooldown_sec)
         self.ta_refresh_sec = float(cfg.orderflow_ta_refresh_sec)
+        self.min_gap_sec = float(cfg.orderflow_min_gap_sec)
+        self.min_move_pct = float(cfg.orderflow_min_move_pct)
 
         self.dispatcher = dispatcher
         self.dry_run = dry_run
@@ -289,6 +307,8 @@ class OrderflowEngine:
         self._buy_flow = 0.0
         self._sell_flow = 0.0
         self._cooldown_until: dict[str, float] = {"long": 0.0, "short": 0.0}
+        self._last_alert_at = -1.0e9  # 全域最小間隔用：最後一次「已發送」時間
+        self._last_alert_price: dict[str, float] = {}  # 各方向最後一筆已發送價位
 
         self.stats: dict[str, float] = {
             "trades": 0,
@@ -297,6 +317,8 @@ class OrderflowEngine:
             "signals": 0,
             "suppressed_sr": 0,
             "suppressed_cooldown": 0,
+            "suppressed_gap": 0,
+            "suppressed_move": 0,
             "max_single_notional": 0.0,
             "max_buy_flow": 0.0,
             "max_sell_flow": 0.0,
@@ -402,6 +424,27 @@ class OrderflowEngine:
             log.debug("%s 方向冷卻中（剩餘 %.0f 秒），壓制", direction, self._cooldown_until[direction] - clock)
             return None
 
+        # --- 全域最小間隔（任何方向；防連環刷頻）---
+        if (clock - self._last_alert_at) < self.min_gap_sec:
+            self.stats["suppressed_gap"] += 1
+            log.debug(
+                "距上次警報僅 %.0f 秒（< %d 秒全域間隔），壓制",
+                clock - self._last_alert_at,
+                int(self.min_gap_sec),
+            )
+            return None
+
+        # --- 同方向需有足夠價格推移（避免同價位反覆觸發）---
+        last_price = self._last_alert_price.get(direction)
+        if last_price and abs(price - last_price) / last_price * 100.0 < self.min_move_pct:
+            self.stats["suppressed_move"] += 1
+            log.debug(
+                "同方向警報價位僅推移 %.3f%%（< %.2f%%），壓制",
+                abs(price - last_price) / last_price * 100.0,
+                self.min_move_pct,
+            )
+            return None
+
         # --- 組裝訊號 ---
         trigger = "window_flow" if window_hit else "single_block"
         if window_hit:
@@ -432,10 +475,12 @@ class OrderflowEngine:
             trigger=trigger,
             level_kind=level_kind,
             level_price=level_price,
-            level_text=LEVEL_TEXT[(level_kind, direction)].format(price=level_price),
+            level_text=_level_text(level_kind, direction, level_price, price),
             trade_time=datetime.fromtimestamp(event.trade_time_ms / 1000.0, tz=timezone.utc),
         )
         self._cooldown_until[direction] = clock + self.cooldown_sec
+        self._last_alert_at = clock
+        self._last_alert_price[direction] = price
         self.stats["signals"] += 1
         return signal
 
@@ -518,7 +563,8 @@ class OrderflowEngine:
     # ------------------------------------------------------------------ #
     def stats_line(self) -> str:
         return (
-            "trades=%d｜單筆巨量=%d｜窗口觸發=%d｜訊號=%d｜S/R 壓制=%d｜冷卻壓制=%d"
+            "trades=%d｜單筆巨量=%d｜窗口觸發=%d｜訊號=%d"
+            "｜S/R 壓制=%d｜冷卻壓制=%d｜間隔壓制=%d｜同價壓制=%d"
             "｜單筆最大=$%.0f｜買峰=$%.0f｜賣峰=$%.0f"
             % (
                 self.stats["trades"],
@@ -527,6 +573,8 @@ class OrderflowEngine:
                 self.stats["signals"],
                 self.stats["suppressed_sr"],
                 self.stats["suppressed_cooldown"],
+                self.stats["suppressed_gap"],
+                self.stats["suppressed_move"],
                 self.stats["max_single_notional"],
                 self.stats["max_buy_flow"],
                 self.stats["max_sell_flow"],
@@ -625,7 +673,7 @@ def run_orderflow_cli(
             trigger="window_flow",
             level_kind=level_kind,
             level_price=level_price,
-            level_text=LEVEL_TEXT[(level_kind, direction)].format(price=level_price),
+            level_text=_level_text(level_kind, direction, level_price, price),
             trade_time=datetime.now(timezone.utc),
         )
         text = format_orderflow_alert(sample)
