@@ -31,6 +31,7 @@ import sys
 import threading
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 
@@ -74,6 +75,21 @@ def _background_worker(interval: int) -> None:
         try:
             sent = run_full_cycle(cfg, tools)
             log.info("本輪推播 %d 則", sent)
+            if _engines:
+                summary = _engine_summary()
+                log.info(
+                    "引擎心跳：WS %d/%d 已連線｜成交累計 %d 筆｜訊號累計 %d｜REST 熔斷剩餘 %.0f 秒%s",
+                    summary["ws_connected"],
+                    summary["engines"],
+                    summary["trades_total"],
+                    summary["signals_total"],
+                    summary["rest_blocked_sec"],
+                    (
+                        "｜缺基準：" + ",".join(summary["missing_baseline"])
+                        if summary["missing_baseline"]
+                        else ""
+                    ),
+                )
         except Exception:
             log.exception("本輪執行失敗，將於下一輪重試")
         time.sleep(interval)
@@ -94,6 +110,27 @@ def _start_worker_once() -> None:
 
 
 _engine_tasks: list[asyncio.Task] = []
+_engines: list[OrderflowEngine] = []
+
+
+def _engine_summary() -> dict:
+    """匯總全部引擎健康狀態（/status 與心跳日誌共用）。"""
+    engines = list(_engines)
+    connected = sum(1 for engine in engines if engine._connected)
+    stale = [
+        engine.symbol
+        for engine in engines
+        if engine.snapshot is None or engine.atr is None
+    ]
+    gate_remaining = max((engine.gate.remaining() for engine in engines), default=0.0)
+    return {
+        "engines": len(engines),
+        "ws_connected": connected,
+        "missing_baseline": stale,
+        "trades_total": sum(int(engine.stats["trades"]) for engine in engines),
+        "signals_total": sum(int(engine.stats["signals"]) for engine in engines),
+        "rest_blocked_sec": round(gate_remaining, 0),
+    }
 
 
 async def _start_orderflow_engine() -> None:
@@ -110,6 +147,7 @@ async def _start_orderflow_engine() -> None:
     symbols = list(cfg.binance_symbols)
     context_spread = min(60.0, float(cfg.orderflow_ta_refresh_sec)) / max(1, len(symbols))
     tasks: list[asyncio.Task] = []
+    engines: list[OrderflowEngine] = []
     started: list[str] = []
     for index, code in enumerate(symbols):
         engine = OrderflowEngine(cfg, dispatcher, symbol=code, budget=budget, gate=gate)
@@ -120,9 +158,12 @@ async def _start_orderflow_engine() -> None:
         except Exception as exc:  # noqa: BLE001 - 限流時沿用預設代碼，稍後自動重試
             log.warning("%s 合約代碼解析失敗（%s），沿用預設，稍後自動重試", code, exc)
         tasks.append(asyncio.create_task(engine.run_forever(), name=f"orderflow-{engine.symbol}"))
+        engines.append(engine)
         started.append(engine.symbol)
         await asyncio.sleep(0.5)  # 錯峰啟動，避免 23 個標的同時打 REST
     _engine_tasks = tasks
+    _engines.clear()
+    _engines.extend(engines)
     log.info(
         "訂單流引擎已啟動 %d 個標的：%s（全頻道上限 %d 則/小時）",
         len(tasks),
@@ -157,6 +198,15 @@ def root() -> dict:
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/status")
+def status() -> dict:
+    """引擎健康看板：WS 連線數、成交量、訊號數、REST 熔斷剩餘時間。"""
+    summary = _engine_summary()
+    summary["server_time"] = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+    summary["symbols"] = [engine.health() for engine in list(_engines)]
+    return {"status": "ok", **summary}
 
 
 def _parse_args(argv=None) -> argparse.Namespace:

@@ -574,6 +574,10 @@ class OrderflowEngine:
         self._last_stale_warn = 0.0
         self._baseline_warned = False
         self._next_context_at = 0.0
+        # 健康監控（/status 與心跳日誌用）
+        self._connected = False
+        self._last_msg_at = 0.0
+        self._connected_at = 0.0
         # WS K 線增量維護 ATR（REST 被封鎖也不中斷）
         self._bar_ms = interval_ms(self.kline_interval)
         self._prev_close: float | None = None
@@ -1194,38 +1198,44 @@ class OrderflowEngine:
         ) as socket:
             log.info("訂單流 WebSocket 已連線：%s", uri)
 
-            async for raw in socket:
-                if self._stopping:
-                    return
-                if time.monotonic() >= self._next_refresh_at:
-                    await asyncio.to_thread(self.refresh_market_data, False)
-                if (
-                    self.context is None
-                    and not self.gate.blocked()
-                    and time.monotonic() >= self._next_context_at
-                ):
-                    await asyncio.to_thread(self._refresh_context, True)
-                try:
-                    message = json.loads(raw)
-                except ValueError:
-                    continue
-                data = message.get("data", message)
-                event_type = data.get("e")
-                if event_type == "24hrTicker":
-                    self._apply_ws_ticker(data)
-                    continue
-                if event_type == "kline":
-                    self._apply_ws_kline(data)
-                    continue
-                if event_type != "trade":
-                    continue
-                try:
-                    event = parse_trade(data)
-                except (KeyError, TypeError, ValueError):
-                    continue
-                signal = self.process_trade(event)
-                if signal is not None:
-                    await self._dispatch(signal)
+            self._connected = True
+            self._connected_at = time.monotonic()
+            try:
+                async for raw in socket:
+                    if self._stopping:
+                        return
+                    self._last_msg_at = time.monotonic()
+                    if time.monotonic() >= self._next_refresh_at:
+                        await asyncio.to_thread(self.refresh_market_data, False)
+                    if (
+                        self.context is None
+                        and not self.gate.blocked()
+                        and time.monotonic() >= self._next_context_at
+                    ):
+                        await asyncio.to_thread(self._refresh_context, True)
+                    try:
+                        message = json.loads(raw)
+                    except ValueError:
+                        continue
+                    data = message.get("data", message)
+                    event_type = data.get("e")
+                    if event_type == "24hrTicker":
+                        self._apply_ws_ticker(data)
+                        continue
+                    if event_type == "kline":
+                        self._apply_ws_kline(data)
+                        continue
+                    if event_type != "trade":
+                        continue
+                    try:
+                        event = parse_trade(data)
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    signal = self.process_trade(event)
+                    if signal is not None:
+                        await self._dispatch(signal)
+            finally:
+                self._connected = False
 
     async def _dispatch(self, signal: OrderflowSignal) -> None:
         if signal.entry_price <= 0 or signal.stop_loss <= 0:
@@ -1256,6 +1266,30 @@ class OrderflowEngine:
         ok = await asyncio.to_thread(self.dispatcher.send_alert, text, self.dry_run)
         if not ok:
             log.warning("訂單流警報發送失敗（%s %s）", self.symbol, signal.direction)
+
+    def health(self) -> dict:
+        """健康快照（供 /status 與心跳日誌）。"""
+        now = time.monotonic()
+        context_age = None
+        if self.context is not None:
+            context_age = round(
+                (datetime.now(timezone.utc) - self.context.fetched_at).total_seconds(), 0
+            )
+        return {
+            "symbol": self.symbol,
+            "connected": self._connected,
+            "last_msg_age_sec": round(now - self._last_msg_at, 1) if self._last_msg_at else None,
+            "snapshot_age_sec": (
+                round((datetime.now(timezone.utc) - self.snapshot.fetched_at).total_seconds(), 1)
+                if self.snapshot is not None
+                else None
+            ),
+            "price": round(self.snapshot.last_price, 6) if self.snapshot is not None else None,
+            "atr": round(self.atr, 6) if self.atr else None,
+            "context_age_sec": context_age,
+            "trades": int(self.stats["trades"]),
+            "signals": int(self.stats["signals"]),
+        }
 
     # ------------------------------------------------------------------ #
     def stats_line(self) -> str:
