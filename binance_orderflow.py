@@ -500,6 +500,7 @@ class OrderflowEngine:
         self._refresh_fail_until = 0.0  # 418/429 封鎖期間（單調鐘；強制刷新也須等）
         self._refresh_failures = 0
         self._last_stale_warn = 0.0
+        self._baseline_warned = False
 
         # 多尺度滾動窗口（15s 大單偵測 / 60s 動能與吸收 / 300s 背離）
         self.win15 = FlowWindow(self.window_ms)
@@ -611,6 +612,7 @@ class OrderflowEngine:
             except Exception as exc:  # noqa: BLE001 - 上下文失敗不影響行情基準
                 log.warning("%s 市場上下文取得失敗（沿用舊值）：%s", self.symbol, exc)
             self._refresh_failures = 0
+            self._baseline_warned = False
             self._next_refresh_at = time.monotonic() + self.ta_refresh_sec
             log.info(
                 "行情基準已更新：%s 現價 $%.2f｜24h %.2f–%.2f｜ATR(%s,%d) $%.2f",
@@ -649,8 +651,10 @@ class OrderflowEngine:
             self.stats["window_triggers"] += 1
 
         if self.snapshot is None or self.atr is None or self.atr <= 0:
-            if single_hit or window_flow >= self.window_usd:
-                log.warning("觸發大單但行情基準尚未就緒，略過本筆")
+            # 只提示一次，避免開盤瞬間每筆觸發都刷 WARNING
+            if not self._baseline_warned:
+                self._baseline_warned = True
+                log.info("%s 行情基準載入中，暫停評估訊號（完成後自動恢復）", self.symbol)
             return None
 
         # --- 基準過期保護（避免用過期關鍵位發訊）---
@@ -938,6 +942,8 @@ class OrderflowEngine:
     async def _consume_stream(self) -> None:
         stream = f"{self.symbol.lower()}@trade"
         uri = WS_COMBINED.format(streams=stream)
+        # 先載入行情基準再連線：避免開盤瞬間的成交因基準未就緒被丟棄
+        await asyncio.to_thread(self.refresh_market_data, True)
         async with websockets.connect(
             uri,
             open_timeout=20,
@@ -947,7 +953,6 @@ class OrderflowEngine:
             max_queue=8192,
         ) as socket:
             log.info("訂單流 WebSocket 已連線：%s", uri)
-            await asyncio.to_thread(self.refresh_market_data, True)
 
             async for raw in socket:
                 if self._stopping:
