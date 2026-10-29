@@ -28,6 +28,12 @@ services:
         value: "1"
       - key: NEWS_MIN_IMPORTANCE
         value: "6"
+      - key: BINANCE_NEWS_ENABLED
+        value: "1"
+      - key: BINANCE_NEWS_MAX_AGE_HOURS
+        value: "12"
+      - key: BINANCE_NEWS_LIMIT_PER_CYCLE
+        value: "3"
       - key: NEWS_MAX_AGE_MINUTES
         value: "20"
       - key: BINANCE_SYMBOL

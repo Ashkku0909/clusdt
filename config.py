@@ -131,6 +131,10 @@ class Config:
     # 股票基本面分析（Finnhub + DeepSeek；快取於 data/equities）
     equity_symbols: tuple[str, ...] = ("GOOGL", "TSLA")
     equity_cache_ttl_sec: int = 21600
+    # Binance 官方公告（上幣／下架／維護）
+    binance_news_enabled: bool = True
+    binance_news_max_age_hours: int = 12
+    binance_news_limit_per_cycle: int = 3
     # 新聞重要性過濾（DeepSeek Flash；未設金鑰時自動跳過）
     news_importance_filter: bool = True
     news_min_importance: int = 6
@@ -208,6 +212,9 @@ def load_config() -> Config:
         orderflow_min_grade=_env("ORDERFLOW_MIN_GRADE", "C").upper(),
         equity_symbols=_env_list("EQUITY_SYMBOLS", ("GOOGL", "TSLA")),
         equity_cache_ttl_sec=_env_int("EQUITY_CACHE_TTL_SEC", 21600),
+        binance_news_enabled=_env_bool("BINANCE_NEWS_ENABLED", True),
+        binance_news_max_age_hours=_env_int("BINANCE_NEWS_MAX_AGE_HOURS", 12),
+        binance_news_limit_per_cycle=_env_int("BINANCE_NEWS_LIMIT_PER_CYCLE", 3),
         news_importance_filter=_env_bool("NEWS_IMPORTANCE_FILTER", True),
         news_min_importance=_env_int("NEWS_MIN_IMPORTANCE", 6),
         cftc_flow_threshold=_env_int("CFTC_FLOW_THRESHOLD", 0),

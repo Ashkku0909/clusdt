@@ -35,6 +35,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from binance_orderflow import AlertBudget, OrderflowEngine, run_orderflow_cli, run_ws_test
+from binance_news import run_binance_news_cycle
 from cftc_data import run_cftc_cycle
 from config import BASE_DIR, Config, REQUIRED_FIELDS, load_config
 from equities import run_equity_cli
@@ -162,6 +163,7 @@ def _parse_args(argv=None) -> argparse.Namespace:
     mode.add_argument("--once", action="store_true", help="執行一輪完整掃描（預設行為）：新聞 + CFTC")
     mode.add_argument("--loop", action="store_true", help="持續循環執行")
     mode.add_argument("--news", action="store_true", help="只執行即時新聞掃描（嚴格 20 分鐘時間窗）")
+    mode.add_argument("--binance-news", action="store_true", help="只掃描 Binance 官方公告（上幣/下架/維護）")
     mode.add_argument("--orderflow", action="store_true", help="訂單流行情快照（現價/24h 高低/ATR/門檻）")
     mode.add_argument("--cftc", action="store_true", help="只檢查 CFTC 週度 Managed Money 籌碼")
     mode.add_argument("--health", action="store_true", help="檢查各資料源連線狀態（含 Binance）")
@@ -267,6 +269,11 @@ def main(argv=None) -> int:
     if args.news:
         sent = run_news_cycle(cfg, tools.tg, tools.state, dry_run=args.dry_run, limit=args.limit)
         log.info("即時新聞掃描完成：推播 %d 則", sent)
+        return 0
+
+    if args.binance_news:
+        sent = run_binance_news_cycle(cfg, tools.tg, tools.state, dry_run=args.dry_run)
+        log.info("Binance 公告掃描完成：推播 %d 則", sent)
         return 0
 
     if args.orderflow:

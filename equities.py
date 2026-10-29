@@ -39,14 +39,13 @@ METRIC_KEYS = (
 )
 
 SYSTEM_PROMPT = (
-    "You are an equity research assistant for a Chinese-language alert channel. "
+    "You are an equity analyst writing ultra-compact Chinese cards for a paid VIP Telegram channel. "
     "Use ONLY the numbers and headlines provided by the user. Never invent figures or events. "
-    "The user will mark whether PE/PEG are appropriate; if they are not, value the company with "
-    "PS, EV/FCF and growth instead. Be concise and factual. "
+    "If pe_applicable/peg_applicable are false, value the company with PS, EV/FCF and revenue growth. "
+    "Be decisive but factual. "
     "Return ONLY JSON with keys: "
-    '{"summary_zh": "<=80字公司與現況", '
-    '"valuation_zh": "<=80字估值判斷（引用提供的倍數）", '
-    '"catalysts": ["<=20字", "..."], "risks": ["<=20字", "..."], '
+    '{"brief": "<=45字一句公司現況", "bull": "<=40字一條看多理由", '
+    '"bear": "<=40字一條看空理由", '
     '"rating": "bullish|neutral|bearish", "confidence": "low|medium|high"}'
 )
 
@@ -250,36 +249,59 @@ def _fmt_money(value: float | None) -> str:
     return f"${value:,.2f}"
 
 
+RATING_ZH = {"bullish": "🟢 看多", "neutral": "🟡 中性", "bearish": "🔴 看空"}
+CONFIDENCE_ZH = {"low": "低", "medium": "中", "high": "高"}
+
+
+def _fmt_metric(value: float | None, digits: int = 1) -> str:
+    if value is None:
+        return "—"
+    if abs(value) >= 100:
+        return f"{value:,.0f}"
+    return f"{value:,.{digits}f}"
+
+
 def format_equity_report(snapshot: dict, analysis: dict | None) -> str:
+    """VIP 精简卡片：≤9 行，先数字后结论。"""
     metrics = snapshot.get("metrics", {})
-    pe_ok, peg_ok, notes = valuation_assessment(metrics)
+    pe_ok, peg_ok, _ = valuation_assessment(metrics)
+    pe = metrics.get("peTTM")
+    peg = metrics.get("pegTTM")
+    high52 = metrics.get("52WeekHigh")
+    low52 = metrics.get("52WeekLow")
     price = snapshot.get("price") or 0.0
-    change_pct = snapshot.get("change_pct") or 0.0
+    change = snapshot.get("change_pct") or 0.0
+    cap_musd = (snapshot.get("market_cap_musd") or 0.0) * 1e6
+
+    pe_text = f"PE {_fmt_metric(pe)}" + ("" if pe_ok else " ⚠️")
+    peg_text = f"PEG {_fmt_metric(peg)}" + ("" if peg_ok else " ⚠️")
     lines = [
-        f"📊 【{snapshot['symbol']}｜{snapshot['name']}】",
-        f"產業：{snapshot.get('industry') or '—'}｜市值：{_fmt_money((snapshot.get('market_cap_musd') or 0) * 1e6)}",
-        f"價格：${price:,.2f}（日變 {change_pct:+.2f}%）",
-        f"估值：PE {metrics.get('peTTM') or '—'}｜PEG {metrics.get('pegTTM') or '—'}"
-        f"｜PS {metrics.get('psTTM') or '—'}｜EV/FCF {metrics.get('currentEv/freeCashFlowTTM') or '—'}",
-        f"成長：營收 YoY {metrics.get('revenueGrowthTTMYoy') or '—'}%"
-        f"｜EPS YoY {metrics.get('epsGrowthTTMYoy') or '—'}%｜毛利 {metrics.get('grossMarginTTM') or '—'}%",
+        f"📊 {snapshot['symbol']} · {snapshot['name']}（{snapshot.get('industry') or '—'}）",
+        f"💰 ${price:,.2f}｜{change:+.2f}%｜市值 {_fmt_money(cap_musd)}",
+        f"📈 {pe_text}｜{peg_text}｜PS {_fmt_metric(metrics.get('psTTM'))}"
+        f"｜EV/FCF {_fmt_metric(metrics.get('currentEv/freeCashFlowTTM'), 0)}",
+        f"🚀 營收 {_fmt_metric(metrics.get('revenueGrowthTTMYoy'))}%"
+        f"｜EPS {_fmt_metric(metrics.get('epsGrowthTTMYoy'))}%"
+        f"｜毛利 {_fmt_metric(metrics.get('grossMarginTTM'))}%",
     ]
-    if notes:
-        lines.append("估值提示：" + "；".join(notes))
+    if high52 and low52 and price:
+        dist = (price - high52) / high52 * 100.0
+        lines.append(f"📉 52週 {low52:,.2f}–{high52:,.2f}（距高 {dist:+.1f}%）")
+    if not (pe_ok and peg_ok):
+        lines.append("⚠️ PE/PEG 不適用 → 以 PS／EV-FCF／成長評估")
+    lines.append("──────────────")
     if analysis:
-        lines.append(f"摘要：{analysis.get('summary_zh', '').strip()}")
-        lines.append(f"估值判斷：{analysis.get('valuation_zh', '').strip()}")
-        catalysts = "／".join(str(x) for x in (analysis.get("catalysts") or [])[:3])
-        risks = "／".join(str(x) for x in (analysis.get("risks") or [])[:3])
-        if catalysts:
-            lines.append(f"催化：{catalysts}")
-        if risks:
-            lines.append(f"風險：{risks}")
-        lines.append(
-            f"評級：{analysis.get('rating', '—')}（信心 {analysis.get('confidence', '—')}）"
-        )
+        rating = str(analysis.get("rating", "neutral")).lower()
+        confidence = CONFIDENCE_ZH.get(str(analysis.get("confidence", "")).lower(), "—")
+        lines.append(f"{RATING_ZH.get(rating, '🟡 中性')}（信心{confidence}）")
+        if analysis.get("brief"):
+            lines.append(f"📝 {analysis['brief']}")
+        if analysis.get("bull"):
+            lines.append(f"👍 {analysis['bull']}")
+        if analysis.get("bear"):
+            lines.append(f"⚠️ {analysis['bear']}")
     else:
-        lines.append("分析：DeepSeek 暫不可用（僅顯示原始數據）")
+        lines.append("⚠️ LLM 暫不可用，僅顯示數據")
     return "\n".join(lines)
 
 
@@ -289,8 +311,11 @@ def run_equity_cli(cfg, symbols: list[str], dispatcher=None, dry_run: bool = Fal
     reports: list[str] = []
     for symbol in symbols:
         cached = load_cached(cfg, symbol)
-        if cached is not None:
-            snapshot, analysis = cached["snapshot"], cached.get("analysis")
+        cached_analysis = cached.get("analysis") if cached else None
+        # 舊版長文快取（summary_zh）自動失效，改用新的精簡 schema
+        cache_ok = cached is not None and (cached_analysis is None or "brief" in cached_analysis)
+        if cache_ok:
+            snapshot, analysis = cached["snapshot"], cached_analysis
             log.info("%s 使用快取（%s）", symbol, snapshot.get("fetched_at", "")[:19])
         else:
             snapshot = fetch_equity(session, cfg, symbol)

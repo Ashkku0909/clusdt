@@ -45,6 +45,7 @@ flowchart LR
 | `news_importance.py` | DeepSeek Flash 新聞重要性評分（0–10，過濾低價值新聞＋受影響資產） |
 | `market_context.py` | 多周期上下文：ADX(15m/1h/4h/1d)、CVD、OI 增減倉矩陣、資金費率；訊號評級 A/B/C |
 | `equities.py` | 股票基本面＋新聞分析（Finnhub + DeepSeek，PE/PEG 適用性檢查，快取 `data/equities`） |
+| `binance_news.py` | Binance 官方公告（上幣／下架／空投／維護／TradFi），精簡 4 行卡片 |
 | `telegram_dispatcher.py` | 發送層：429 退避、逾時靜默丟棄、最小發送間隔 |
 | `news_sources.py` | Finnhub / Al Jazeera RSS / Marketaux 抓取與能源關鍵字過濾 |
 | `cftc_data.py` | CFTC Socrata 週報 Managed Money 持倉與推播週期（067651） |
@@ -104,6 +105,7 @@ python -m venv .venv
 | `ORDERFLOW_ABSORPTION_USD` / `ORDERFLOW_ABSORPTION_RANGE_PCT` | 巨量吸收門檻（預設 $3M / 0.08%） |
 | `ORDERFLOW_DIVERGENCE_USD` / `ORDERFLOW_DIVERGENCE_PRICE_PCT` | 量價背離門檻（預設 $3M / 0.10%） |
 | `NEWS_IMPORTANCE_FILTER` / `NEWS_MIN_IMPORTANCE` | DeepSeek Flash 新聞過濾（預設開啟；分數 < 6 過濾） |
+| `BINANCE_NEWS_ENABLED` / `BINANCE_NEWS_MAX_AGE_HOURS` / `BINANCE_NEWS_LIMIT_PER_CYCLE` | Binance 官方公告監控（預設開啟；只看 12 小時內；每輪最多 3 則） |
 | `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` | 新聞評分金鑰與模型（預設 `deepseek-flash`；未設金鑰＝不過濾） |
 | `ORDERFLOW_TA_REFRESH_SEC` | 24h 高低／ATR 刷新間隔（預設 300，秒） |
 | `LOOP_INTERVAL_SECONDS` | Render／`--serve` 背景輪詢間隔秒數（預設 300） |
@@ -124,6 +126,7 @@ python -m venv .venv
 .venv\Scripts\python.exe main.py --orderflow --symbol BTCUSDT  # 單一標的詳細資料
 .venv\Scripts\python.exe main.py --equity GOOGL TSLA    # 股票基本面＋新聞分析（快取）
 .venv\Scripts\python.exe main.py --equity --force       # 分析並推播到 Telegram
+.venv\Scripts\python.exe main.py --binance-news         # Binance 官方公告掃描（上幣/下架/維護）
 .venv\Scripts\python.exe main.py --orderflow --force    # 加發一則示範警報（驗證 Telegram 格式）
 .venv\Scripts\python.exe main.py --ws-test 60           # 實時監聽 60 秒（印統計，不發送任何訊息）
 .venv\Scripts\python.exe main.py --news                 # 即時新聞掃描（20 分鐘窗 + 直譯）

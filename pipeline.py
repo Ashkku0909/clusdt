@@ -10,6 +10,7 @@ import logging
 from dataclasses import dataclass
 
 from cftc_data import run_cftc_cycle
+from binance_news import run_binance_news_cycle
 from config import Config
 from news_pipeline import run_news_cycle
 from state import StateStore
@@ -27,8 +28,9 @@ class Tools:
 
 
 def run_full_cycle(cfg: Config, tools: Tools, dry_run: bool = False, limit: int | None = None) -> int:
-    """完整一輪：即時新聞（嚴格時間窗）+ CFTC 週度籌碼。"""
+    """完整一輪：即時新聞（嚴格時間窗）+ Binance 公告 + CFTC 週度籌碼。"""
     sent = run_news_cycle(cfg, tools.tg, tools.state, dry_run=dry_run, limit=limit)
+    sent += run_binance_news_cycle(cfg, tools.tg, tools.state, dry_run=dry_run)
     sent += run_cftc_cycle(cfg, tools.tg, tools.state, dry_run=dry_run)
     return sent
 
