@@ -32,6 +32,8 @@ services:
         value: "20"
       - key: BINANCE_SYMBOL
         value: "CLUSDT"
+      - key: BINANCE_SYMBOLS
+        value: "CLUSDT,BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,LINKUSDT,ENAUSDT,XAUUSDT,XAGUSDT"
       - key: ORDERFLOW_BLOCK_USD
         value: "500000"
       - key: ORDERFLOW_WINDOW_USD
@@ -56,6 +58,12 @@ services:
         value: "1"
       - key: ORDERFLOW_ENABLE_DIVERGENCE
         value: "1"
+      - key: ORDERFLOW_AUTO_CALIBRATE
+        value: "1"
+      - key: ORDERFLOW_CALIBRATION_FACTOR
+        value: "4.5"
+      - key: ORDERFLOW_MAX_ALERTS_PER_HOUR
+        value: "20"
       - key: LOG_LEVEL
         value: "INFO"
       - key: LOOP_INTERVAL_SECONDS

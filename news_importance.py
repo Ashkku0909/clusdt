@@ -27,16 +27,39 @@ CATEGORY_LABELS = {
     "other": "其他",
 }
 
+ASSET_LABELS = {
+    "CL": "原油",
+    "BTC": "BTC",
+    "ETH": "ETH",
+    "SOL": "SOL",
+    "XRP": "XRP",
+    "LINK": "LINK",
+    "ENA": "ENA",
+    "XAU": "黃金",
+    "XAG": "白銀",
+}
+ASSET_ALIASES = {
+    "OIL": "CL",
+    "WTI": "CL",
+    "CRUDE": "CL",
+    "GOLD": "XAU",
+    "SILVER": "XAG",
+}
+
 SYSTEM_PROMPT = (
-    "You are a strict crude-oil news triage filter for an automated WTI/Brent alert bot. "
-    "Score how likely the article is to materially move crude oil prices within 24 hours (0-10). "
+    "You are a strict crypto/commodity news triage filter for an automated alert bot "
+    "watching CL (crude oil), BTC, ETH, SOL, XRP, LINK, ENA, XAU (gold), XAG (silver). "
+    "Score how likely the article is to materially move ANY of these assets within 24 hours (0-10). "
     "Consider: OPEC+ decisions, supply disruptions, sanctions, war or infrastructure attacks, "
-    "inventories (EIA/API), demand data, and major macro catalysts. "
-    "Treat as LOW importance: price recaps, technical-analysis pieces, opinion, single-company/stock news, "
-    "unrelated commodities or markets, and stale content without a new catalyst. "
+    "inventories (EIA/API), ETF/regulatory news, exchange/security incidents, demand data, "
+    "and major macro catalysts. "
+    "Treat as LOW importance: price recaps, technical-analysis pieces, opinion, minor token news, "
+    "unrelated markets, and stale content without a new catalyst. "
     'Return ONLY JSON: {"score": <integer 0-10>, '
     '"category": "<supply|demand|geopolitics|inventories|macro|other>", '
-    '"reason": "<max 15 words>"}'
+    '"reason": "<max 15 words>", "symbols": ["CL", "XAU"]}'
+    " Where symbols lists only affected assets from: CL, BTC, ETH, SOL, XRP, LINK, ENA, XAU, XAG"
+    " (empty array if none)."
 )
 
 
@@ -45,10 +68,20 @@ class NewsVerdict:
     score: int
     category: str
     reason: str
+    symbols: tuple[str, ...] = ()
 
 
 def category_label(category: str) -> str:
     return CATEGORY_LABELS.get((category or "").strip().lower(), "其他")
+
+
+def normalise_asset(code: str) -> str:
+    code = (code or "").strip().upper()
+    return ASSET_ALIASES.get(code, code)
+
+
+def assets_label(symbols) -> str:
+    return "、".join(ASSET_LABELS.get(code, code) for code in symbols)
 
 
 def _extract_json(text: str) -> dict | None:
@@ -77,37 +110,61 @@ def score_news(cfg, title: str, body: str) -> NewsVerdict | None:
         return None
     user_prompt = f"Title: {title}\n\nBody: {(body or '')[:1500]}"
     try:
-        response = requests.post(
-            f"{cfg.deepseek_base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {cfg.deepseek_api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": cfg.deepseek_model,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": 0,
-                "max_tokens": 200,
-                "response_format": {"type": "json_object"},
-            },
-            timeout=(6, 40),
-        )
-        if response.status_code != 200:
-            log.warning("DeepSeek 評分失敗 HTTP %d：%s", response.status_code, response.text[:160])
-            return None
-        content = response.json()["choices"][0]["message"].get("content", "")
-        data = _extract_json(content)
-        if not data or "score" not in data:
-            log.warning("DeepSeek 評分回應無法解析：%s", str(content)[:160])
+        data = None
+        for max_tokens in (800, 1600):
+            response = requests.post(
+                f"{cfg.deepseek_base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {cfg.deepseek_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": cfg.deepseek_model,
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "temperature": 0,
+                    "max_tokens": max_tokens,
+                    "response_format": {"type": "json_object"},
+                },
+                timeout=(6, 40),
+            )
+            if response.status_code != 200:
+                log.warning("DeepSeek 評分失敗 HTTP %d：%s", response.status_code, response.text[:160])
+                return None
+            message = response.json()["choices"][0]["message"]
+            # reasoning 模型可能把 token 全用在 reasoning_content；
+            # content 為空時退回解析 reasoning_content，仍失敗則加大預算重試一次
+            content = (message.get("content") or "").strip() or (message.get("reasoning_content") or "").strip()
+            data = _extract_json(content)
+            if data and "score" in data:
+                break
+            log.warning(
+                "DeepSeek 評分回應無法解析（max_tokens=%d，長度 %d），%s",
+                max_tokens,
+                len(content),
+                "重試" if max_tokens == 800 else "放棄",
+            )
+            data = None
+        if not data:
             return None
         score = max(0, min(10, int(data.get("score", 0))))
+        raw_symbols = data.get("symbols") or []
+        if isinstance(raw_symbols, str):
+            raw_symbols = [raw_symbols]
+        symbols = tuple(
+            dict.fromkeys(
+                normalise_asset(str(item))
+                for item in raw_symbols
+                if normalise_asset(str(item)) in ASSET_LABELS
+            )
+        )[:6]
         return NewsVerdict(
             score=score,
             category=str(data.get("category", "other")),
             reason=str(data.get("reason", ""))[:120],
+            symbols=symbols,
         )
     except Exception as exc:  # noqa: BLE001 - fail-open
         log.warning("DeepSeek 評分呼叫失敗：%s", exc)

@@ -7,7 +7,7 @@ import time
 import feedparser
 import requests
 
-from binance_orderflow import fetch_atr, fetch_snapshot, resolve_symbol
+from binance_orderflow import fetch_atr, fetch_snapshot
 from config import Config
 from news_sources import ALJAZEERA_RSS_URLS, DEFAULT_HEADERS, is_aljazeera_relevant
 
@@ -31,17 +31,23 @@ def _check_telegram(cfg: Config) -> str:
 
 
 def _check_binance(cfg: Config) -> str:
-    """Binance USDT-M：確認合約存在、24h ticker 與 15m ATR 皆可取得。"""
+    """Binance USDT-M：逐一確認 BINANCE_SYMBOLS 的 24h ticker 與 15m ATR。"""
     session = requests.Session()
-    symbol = resolve_symbol(session, cfg.binance_symbol)
-    snapshot = fetch_snapshot(session, symbol)
-    atr = fetch_atr(session, symbol, cfg.orderflow_kline_interval, cfg.orderflow_atr_period)
-    return (
-        f"{symbol} 現價 ${snapshot.last_price:,.2f}"
-        f"｜24h {snapshot.low_24h:,.2f}–{snapshot.high_24h:,.2f}"
-        f"｜ATR({cfg.orderflow_kline_interval},{cfg.orderflow_atr_period}) ${atr:,.2f}"
-        f"｜24h 成交額 ${snapshot.quote_volume_24h:,.0f}"
-    )
+    ok: list[str] = []
+    failed: list[str] = []
+    for code in cfg.binance_symbols:
+        try:
+            snapshot = fetch_snapshot(session, code)
+            atr = fetch_atr(session, code, cfg.orderflow_kline_interval, cfg.orderflow_atr_period)
+            ok.append(f"{code} ${snapshot.last_price:,.4f}（ATR {atr:,.4f}）")
+        except Exception as exc:  # noqa: BLE001 - 單一標的失敗不影響其他
+            failed.append(f"{code} ✗ {type(exc).__name__}")
+    detail = f"{len(ok)}/{len(cfg.binance_symbols)} 標的正常"
+    if ok:
+        detail += "｜" + "｜".join(ok[:4]) + ("…" if len(ok) > 4 else "")
+    if failed:
+        detail += "｜失敗：" + ",".join(failed)
+    return detail
 
 
 def _check_marketaux(cfg: Config) -> str:

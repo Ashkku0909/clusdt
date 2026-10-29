@@ -45,6 +45,27 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_list(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    raw = _env(name)
+    if not raw:
+        return default
+    items = tuple(part.strip().upper() for part in raw.split(",") if part.strip())
+    return items or default
+
+
+DEFAULT_SYMBOLS: tuple[str, ...] = (
+    "CLUSDT",
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "XRPUSDT",
+    "LINKUSDT",
+    "ENAUSDT",
+    "XAUUSDT",
+    "XAGUSDT",
+)
+
+
 @dataclass(frozen=True)
 class Config:
     # Telegram
@@ -77,6 +98,7 @@ class Config:
     marketaux_min_interval_sec: int = 1800
     # Binance 即時訂單流（唯一權威市場資料源；零 LLM）
     binance_symbol: str = "CLUSDT"
+    binance_symbols: tuple[str, ...] = DEFAULT_SYMBOLS
     orderflow_block_usd: float = 500_000.0
     orderflow_window_usd: float = 1_000_000.0
     orderflow_window_sec: int = 15
@@ -99,6 +121,12 @@ class Config:
     orderflow_enable_divergence: bool = True
     orderflow_divergence_usd: float = 3_000_000.0
     orderflow_divergence_price_pct: float = 0.10
+    # 多標的門檻自動校準（依 24h 成交額；每標的獨立）與全域警報預算
+    orderflow_auto_calibrate: bool = True
+    orderflow_calibration_factor: float = 4.5
+    orderflow_min_window_usd: float = 100_000.0
+    orderflow_max_window_usd: float = 12_000_000.0
+    orderflow_max_alerts_per_hour: int = 20
     # 新聞重要性過濾（DeepSeek Flash；未設金鑰時自動跳過）
     news_importance_filter: bool = True
     news_min_importance: int = 6
@@ -146,6 +174,7 @@ def load_config() -> Config:
         translate_target=_env("TRANSLATE_TARGET", "zh-TW"),
         marketaux_min_interval_sec=_env_int("MARKETAUX_MIN_INTERVAL_SEC", 1800),
         binance_symbol=_env("BINANCE_SYMBOL", "CLUSDT").upper(),
+        binance_symbols=_env_list("BINANCE_SYMBOLS", DEFAULT_SYMBOLS),
         orderflow_block_usd=_env_float("ORDERFLOW_BLOCK_USD", 500_000.0),
         orderflow_window_usd=_env_float("ORDERFLOW_WINDOW_USD", 1_000_000.0),
         orderflow_window_sec=_env_int("ORDERFLOW_WINDOW_SEC", 15),
@@ -167,6 +196,11 @@ def load_config() -> Config:
         orderflow_enable_divergence=_env_bool("ORDERFLOW_ENABLE_DIVERGENCE", True),
         orderflow_divergence_usd=_env_float("ORDERFLOW_DIVERGENCE_USD", 3_000_000.0),
         orderflow_divergence_price_pct=_env_float("ORDERFLOW_DIVERGENCE_PRICE_PCT", 0.10),
+        orderflow_auto_calibrate=_env_bool("ORDERFLOW_AUTO_CALIBRATE", True),
+        orderflow_calibration_factor=_env_float("ORDERFLOW_CALIBRATION_FACTOR", 4.5),
+        orderflow_min_window_usd=_env_float("ORDERFLOW_MIN_WINDOW_USD", 100_000.0),
+        orderflow_max_window_usd=_env_float("ORDERFLOW_MAX_WINDOW_USD", 12_000_000.0),
+        orderflow_max_alerts_per_hour=_env_int("ORDERFLOW_MAX_ALERTS_PER_HOUR", 20),
         news_importance_filter=_env_bool("NEWS_IMPORTANCE_FILTER", True),
         news_min_importance=_env_int("NEWS_MIN_IMPORTANCE", 6),
         cftc_flow_threshold=_env_int("CFTC_FLOW_THRESHOLD", 0),

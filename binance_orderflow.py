@@ -1,4 +1,10 @@
-"""幣安 USDT-M 合約即時訂單流引擎（CL 原油；100% 確定性、零 LLM）。
+"""幣安 USDT-M 合約即時訂單流引擎（多標的；100% 確定性、零 LLM）。
+
+支援標的（BINANCE_SYMBOLS，逗號分隔）：
+    CL 原油（CLUSDT）、BTC、ETH、SOL、XRP、LINK、ENA、XAU 黃金（TRADIFI）、XAG 白銀（TRADIFI）
+
+每個標的獨立運行一個引擎（各自 WS 串流、滾動窗口、冷卻與自動校準門檻）；
+所有標的共用一個「全頻道警報預算」（ORDERFLOW_MAX_ALERTS_PER_HOUR）。
 
 唯一權威市場資料源：Binance 公共 REST + WebSocket
 ====================================================
@@ -72,13 +78,30 @@ DIRECTION_LABELS = {"long": "做多 🟢", "short": "做空 🔴"}
 # 開頭號誌燈（紅綠燈語意）：做多 = 綠燈 🟢、做空 = 紅燈 🔴
 DIRECTION_LIGHTS = {"long": "🟢", "short": "🔴"}
 
-# 各訊號類型標題（警報第一行）
-HEADER_LABELS = {
-    "sweep": "幣安 CL原油 異動",
-    "momentum": "幣安 CL原油 動能突破",
-    "absorption": "幣安 CL原油 巨量吸收",
-    "divergence": "幣安 CL原油 量價背離",
+# 標的名稱（警報標題）與訊號類型後綴
+SYMBOL_LABELS = {
+    "BTCUSDT": "BTC",
+    "ETHUSDT": "ETH",
+    "SOLUSDT": "SOL",
+    "XRPUSDT": "XRP",
+    "LINKUSDT": "LINK",
+    "ENAUSDT": "ENA",
+    "XAUUSDT": "XAU 黃金",
+    "XAGUSDT": "XAG 白銀",
+    "PAXGUSDT": "PAXG 黃金",
+    "CLUSDT": "CL 原油",
 }
+KIND_LABELS = {
+    "sweep": "異動",
+    "momentum": "動能突破",
+    "absorption": "巨量吸收",
+    "divergence": "量價背離",
+}
+
+
+def symbol_label(symbol: str) -> str:
+    code = (symbol or "").upper()
+    return SYMBOL_LABELS.get(code, code.replace("USDT", ""))
 
 NATURE_SWEEP = "連續市價吃單 (主動做市主力)"
 NATURE_DEFENSE = "關鍵位強勢防守"
@@ -335,7 +358,7 @@ def format_orderflow_alert(signal: OrderflowSignal) -> str:
     """依既定模板輸出警報（純文字，Telegram 端僅做 Markdown→HTML 轉義）。"""
     return "\n".join(
         [
-            f"{DIRECTION_LIGHTS[signal.direction]} 【{HEADER_LABELS.get(signal.kind, HEADER_LABELS['sweep'])}】",
+            f"{DIRECTION_LIGHTS[signal.direction]} 【{symbol_label(signal.symbol)} {KIND_LABELS.get(signal.kind, KIND_LABELS['sweep'])}】",
             "━━━━━━━━━━━━━━━━━━",
             f"方向：{DIRECTION_LABELS[signal.direction]}",
             f"進場位：${signal.entry_price:,.2f}",
@@ -352,8 +375,27 @@ def format_orderflow_alert(signal: OrderflowSignal) -> str:
 # --------------------------------------------------------------------- #
 # 訂單流引擎
 # --------------------------------------------------------------------- #
+class AlertBudget:
+    """全域警報預算（所有標的共用；防止多標的同時刷頻）。"""
+
+    def __init__(self, max_per_hour: int) -> None:
+        self.max_per_hour = max(0, int(max_per_hour))
+        self._sent: Deque[float] = deque()
+
+    def allow(self, clock: float) -> bool:
+        """在 1 小時滾動窗內保留一個名額；超過上限回傳 False（0 = 不限）。"""
+        if self.max_per_hour <= 0:
+            return True
+        while self._sent and clock - self._sent[0] > 3600.0:
+            self._sent.popleft()
+        if len(self._sent) >= self.max_per_hour:
+            return False
+        self._sent.append(clock)
+        return True
+
+
 class OrderflowEngine:
-    """Binance 逐筆成交 → 大單／連續吃單偵測 → 固定模板警報。"""
+    """Binance 逐筆成交 → 大單／連續吃單偵測 → 固定模板警報（單一標的）。"""
 
     def __init__(
         self,
@@ -362,6 +404,7 @@ class OrderflowEngine:
         *,
         symbol: str | None = None,
         dry_run: bool = False,
+        budget: "AlertBudget | None" = None,
     ) -> None:
         self.symbol = (symbol or getattr(cfg, "binance_symbol", "") or CANDIDATE_SYMBOLS[0]).upper()
         self.block_usd = float(cfg.orderflow_block_usd)
@@ -384,6 +427,12 @@ class OrderflowEngine:
         self.enable_divergence = bool(cfg.orderflow_enable_divergence)
         self.divergence_usd = float(cfg.orderflow_divergence_usd)
         self.divergence_price_pct = float(cfg.orderflow_divergence_price_pct)
+        # 自動門檻校準（依 24h 成交額；每標的獨立）
+        self.auto_calibrate = bool(cfg.orderflow_auto_calibrate)
+        self.calibration_factor = float(cfg.orderflow_calibration_factor)
+        self.min_window_usd = float(cfg.orderflow_min_window_usd)
+        self.max_window_usd = float(cfg.orderflow_max_window_usd)
+        self.budget = budget
 
         self.dispatcher = dispatcher
         self.dry_run = dry_run
@@ -421,6 +470,7 @@ class OrderflowEngine:
             "signal_momentum": 0,
             "signal_absorption": 0,
             "signal_divergence": 0,
+            "suppressed_budget": 0,
             "max_single_notional": 0.0,
             "max_buy_flow": 0.0,
             "max_sell_flow": 0.0,
@@ -433,6 +483,34 @@ class OrderflowEngine:
         """確定並記住實際可用的合約代碼。"""
         self.symbol = resolve_symbol(self.session, self.symbol)
         return self.symbol
+
+    def apply_calibration(self, snapshot: MarketSnapshot) -> None:
+        """依 24h 成交額自動校準門檻（每 15 秒平均流量 × 係數，含地板／天花板）。
+
+        BTC（$11.8B/24h）與 LINK（$150M/24h）流量差 ~80 倍，固定門檻不可用；
+        校準後各標的的門檻都代表「同一統計強度」的異常流量。
+        """
+        if not self.auto_calibrate or snapshot.quote_volume_24h <= 0:
+            return
+        flow_15s = snapshot.quote_volume_24h / 86400.0 * 15.0
+        window = self.calibration_factor * flow_15s
+        window = min(self.max_window_usd, max(self.min_window_usd, window))
+        changed = abs(window - self.window_usd) / max(self.window_usd, 1.0) > 0.20
+        self.window_usd = window
+        self.block_usd = window * 0.5
+        self.momentum_usd = window * 2.0
+        self.absorption_usd = window * 3.0
+        self.divergence_usd = window * 3.0
+        if changed:
+            log.info(
+                "門檻校準 %s：15s 窗口 $%s｜單筆 $%s｜動能60s $%s｜吸收60s $%s｜背離5m $%s",
+                self.symbol,
+                f"{self.window_usd:,.0f}",
+                f"{self.block_usd:,.0f}",
+                f"{self.momentum_usd:,.0f}",
+                f"{self.absorption_usd:,.0f}",
+                f"{self.divergence_usd:,.0f}",
+            )
 
     def refresh_market_data(self, force: bool = False) -> None:
         """刷新 24h 高低點與 ATR（阻塞；請以 to_thread 呼叫）。
@@ -473,6 +551,7 @@ class OrderflowEngine:
                 return
             self.snapshot = snapshot
             self.atr = atr
+            self.apply_calibration(snapshot)
             self._refresh_failures = 0
             self._next_refresh_at = time.monotonic() + self.ta_refresh_sec
             log.info(
@@ -724,6 +803,12 @@ class OrderflowEngine:
             )
             return None
 
+        # --- 全域警報預算（所有標的共用 1 小時上限）---
+        if self.budget is not None and not self.budget.allow(clock):
+            self.stats["suppressed_budget"] += 1
+            log.debug("全域警報預算已滿（%d/小時），壓制", self.budget.max_per_hour)
+            return None
+
         stop_loss = (
             price - self.atr_mult * self.atr if direction == "long" else price + self.atr_mult * self.atr
         )
@@ -831,7 +916,7 @@ class OrderflowEngine:
     def stats_line(self) -> str:
         return (
             "trades=%d｜單筆巨量=%d｜窗口觸發=%d｜訊號=%d（sweep=%d/mom=%d/abs=%d/div=%d）"
-            "｜S/R 壓制=%d｜冷卻壓制=%d｜間隔壓制=%d｜同價壓制=%d｜過期壓制=%d"
+            "｜S/R 壓制=%d｜冷卻壓制=%d｜間隔壓制=%d｜同價壓制=%d｜過期壓制=%d｜預算壓制=%d"
             "｜單筆最大=$%.0f｜買峰=$%.0f｜賣峰=$%.0f"
             % (
                 self.stats["trades"],
@@ -847,6 +932,7 @@ class OrderflowEngine:
                 self.stats["suppressed_gap"],
                 self.stats["suppressed_move"],
                 self.stats["suppressed_stale"],
+                self.stats["suppressed_budget"],
                 self.stats["max_single_notional"],
                 self.stats["max_buy_flow"],
                 self.stats["max_sell_flow"],
@@ -876,29 +962,58 @@ def _print_snapshot(engine: OrderflowEngine) -> None:
     price = snapshot.last_price if snapshot else float("nan")
     stop_long = price - engine.atr_mult * atr
     stop_short = price + engine.atr_mult * atr
-    print("\n🛢  幣安訂單流快照")
+    print(f"\n🛢  {symbol_label(engine.symbol)} 訂單流快照")
     print("─" * 64)
     print(f"合約代碼   : {engine.symbol}（Binance USDT-M 永續）")
-    print(f"最新價格   : ${price:,.2f}")
+    print(f"最新價格   : ${price:,.4f}")
     if snapshot:
         dist_high = abs(snapshot.high_24h - price) / snapshot.high_24h * 100
         dist_low = abs(price - snapshot.low_24h) / snapshot.low_24h * 100
         print(
-            f"24h 高／低 : ${snapshot.high_24h:,.2f}（距 {dist_high:.2f}%）"
-            f" / ${snapshot.low_24h:,.2f}（距 {dist_low:.2f}%）"
+            f"24h 高／低 : ${snapshot.high_24h:,.4f}（距 {dist_high:.2f}%）"
+            f" / ${snapshot.low_24h:,.4f}（距 {dist_low:.2f}%）"
         )
         print(
             f"24h 成交額 : ${snapshot.quote_volume_24h:,.0f}"
             f"｜筆數 {snapshot.trade_count_24h:,}"
         )
-    print(f"ATR({engine.kline_interval},{engine.atr_period}) : ${atr:,.2f}")
+    print(f"ATR({engine.kline_interval},{engine.atr_period}) : {atr:,.4f}")
     print(
         f"觸發門檻   : 單筆 >= ${engine.block_usd:,.0f}"
         f"｜{int(engine.window_ms / 1000)}s 同向累計 >= ${engine.window_usd:,.0f}"
         f"｜關鍵位 ±{engine.proximity_pct:.2f}%"
     )
-    print(f"止損示例   : 做多 ${stop_long:,.2f} / 做空 ${stop_short:,.2f}（{engine.atr_mult:g}×ATR）")
+    print(
+        f"其他訊號   : 動能60s ${engine.momentum_usd:,.0f}"
+        f"｜吸收60s ${engine.absorption_usd:,.0f}"
+        f"｜背離5m ${engine.divergence_usd:,.0f}"
+    )
+    print(f"止損示例   : 做多 ${stop_long:,.4f} / 做空 ${stop_short:,.4f}（{engine.atr_mult:g}×ATR）")
     print("─" * 64)
+
+
+def _print_snapshot_table(engines: list[OrderflowEngine]) -> None:
+    print("\n🛢  多標的訂單流快照（門檻依 24h 成交額自動校準）")
+    print("─" * 100)
+    print(
+        f"{'標的':<12}{'現價':>14}{'24h 低–高':>28}{'ATR':>10}"
+        f"{'單筆門檻':>14}{'15s 窗口':>14}{'距高/低':>16}"
+    )
+    for engine in engines:
+        snapshot = engine.snapshot
+        if snapshot is None:
+            print(f"{symbol_label(engine.symbol):<12}資料不可用")
+            continue
+        dist_high = abs(snapshot.high_24h - snapshot.last_price) / snapshot.high_24h * 100
+        dist_low = abs(snapshot.last_price - snapshot.low_24h) / snapshot.low_24h * 100
+        print(
+            f"{symbol_label(engine.symbol):<12}{snapshot.last_price:>14,.4f}"
+            f"{f'{snapshot.low_24h:,.2f}–{snapshot.high_24h:,.2f}':>28}"
+            f"{engine.atr or 0:>10,.4f}"
+            f"{engine.block_usd:>14,.0f}{engine.window_usd:>14,.0f}"
+            f"{f'{dist_high:.2f}%/{dist_low:.2f}%':>16}"
+        )
+    print("─" * 100)
 
 
 def run_orderflow_cli(
@@ -909,17 +1024,30 @@ def run_orderflow_cli(
     force: bool = False,
     symbol: str | None = None,
 ) -> int:
-    """``--orderflow``：一次性快照（不連 WebSocket）；--force 額外發送示範警報。"""
-    engine = OrderflowEngine(cfg, dispatcher, symbol=symbol, dry_run=dry_run)
-    engine.resolve()
-    engine.refresh_market_data(force=True)
-    _print_snapshot(engine)
-
-    if engine.snapshot is None or engine.atr is None:
-        print("❌ 無法取得行情基準（REST 失敗），已中止。")
+    """``--orderflow``：多標的快照；``--symbol`` 指定單一標的詳細資料；``--force`` 發示範警報。"""
+    symbols = [symbol.upper()] if symbol else list(cfg.binance_symbols)
+    engines: list[OrderflowEngine] = []
+    for code in symbols:
+        engine = OrderflowEngine(cfg, dispatcher, symbol=code, dry_run=dry_run)
+        try:
+            engine.resolve()
+            engine.refresh_market_data(force=True)
+        except Exception as exc:  # noqa: BLE001 - 單一標的失敗不影響其他
+            print(f"❌ {code} 初始化失敗：{exc}")
+            continue
+        if engine.snapshot is None or engine.atr is None:
+            print(f"❌ {code} 行情基準不可用")
+            continue
+        engines.append(engine)
+    if not engines:
         return 1
+    if symbol:
+        _print_snapshot(engines[0])
+    else:
+        _print_snapshot_table(engines)
 
     if force:
+        engine = engines[0]
         snapshot = engine.snapshot
         price = snapshot.last_price
         dist_high = abs(snapshot.high_24h - price) / snapshot.high_24h
@@ -959,25 +1087,38 @@ def run_orderflow_cli(
 
 
 def run_ws_test(cfg, seconds: float = 30.0, symbol: str | None = None) -> int:
-    """``--ws-test``：實際監聽 N 秒，印出統計與（listen-only）警報，不發送任何訊息。"""
+    """``--ws-test``：實際監聽 N 秒（預設全部標的），印統計與 listen-only 警報，不發送任何訊息。"""
+    symbols = [symbol.upper()] if symbol else list(cfg.binance_symbols)
 
-    async def runner() -> OrderflowEngine:
-        engine = OrderflowEngine(cfg, dispatcher=None, symbol=symbol, dry_run=True)
-        try:
-            await asyncio.to_thread(engine.resolve)
-        except Exception as exc:  # noqa: BLE001 - 限流時沿用預設代碼
-            log.warning("合約代碼解析失敗（%s），沿用預設 %s", exc, engine.symbol)
-        task = asyncio.create_task(engine.run_forever())
+    async def runner() -> list[OrderflowEngine]:
+        engines: list[OrderflowEngine] = []
+        for code in symbols:
+            engine = OrderflowEngine(cfg, dispatcher=None, symbol=code, dry_run=True)
+            try:
+                await asyncio.to_thread(engine.resolve)
+            except Exception as exc:  # noqa: BLE001 - 限流時沿用預設代碼
+                log.warning("%s 代碼解析失敗（%s），沿用預設", code, exc)
+            engines.append(engine)
+        tasks = [asyncio.create_task(engine.run_forever()) for engine in engines]
         try:
             await asyncio.sleep(seconds)
         finally:
-            engine.stop()
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-        return engine
+            for engine in engines:
+                engine.stop()
+            for task in tasks:
+                task.cancel()
+            for task in tasks:
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
+        return engines
 
-    engine = asyncio.run(runner())
-    print(f"\n📡 {engine.symbol} 監聽 {seconds:.0f} 秒統計：")
-    print("   " + engine.stats_line())
+    engines = asyncio.run(runner())
+    print(f"\n📡 監聽 {seconds:.0f} 秒統計（{len(engines)} 個標的）：")
+    total_trades = 0
+    total_signals = 0
+    for engine in engines:
+        print(f"   {symbol_label(engine.symbol):<12} {engine.stats_line()}")
+        total_trades += int(engine.stats["trades"])
+        total_signals += int(engine.stats["signals"])
+    print(f"   合計：trades={total_trades}｜訊號={total_signals}")
     return 0

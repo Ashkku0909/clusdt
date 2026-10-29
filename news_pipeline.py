@@ -35,7 +35,7 @@ from news_sources import (
     fetch_url_html,
     parse_iso_utc,
 )
-from news_importance import category_label, score_news
+from news_importance import assets_label, category_label, score_news
 from state import StateStore
 
 log = logging.getLogger(__name__)
@@ -355,7 +355,10 @@ def format_news_alert(
         f"🌐 **來源**: {item.source} ｜ 🕒 **發布**: {stamp}",
     ]
     if verdict is not None:
-        lines.append(f"🎯 **重要性**: {verdict.score}/10（{category_label(verdict.category)}）")
+        line = f"🎯 **重要性**: {verdict.score}/10（{category_label(verdict.category)}）"
+        if getattr(verdict, "symbols", ()):
+            line += f" ｜ 影響: {assets_label(verdict.symbols)}"
+        lines.append(line)
     lines += [
         "",
         "📝 **內文快讀 (中譯)**:",

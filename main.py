@@ -34,7 +34,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from binance_orderflow import OrderflowEngine, run_orderflow_cli, run_ws_test
+from binance_orderflow import AlertBudget, OrderflowEngine, run_orderflow_cli, run_ws_test
 from cftc_data import run_cftc_cycle
 from config import BASE_DIR, Config, REQUIRED_FIELDS, load_config
 from health import run_health
@@ -91,31 +91,35 @@ def _start_worker_once() -> None:
     threading.Thread(target=_background_worker, args=(interval,), daemon=True).start()
 
 
-_engine_task: asyncio.Task | None = None
+_engine_tasks: list[asyncio.Task] = []
 
 
 async def _start_orderflow_engine() -> None:
-    """以 asyncio 任務啟動 Binance 訂單流引擎（於 lifespan 呼叫）。"""
-    global _engine_task
+    """以 asyncio 任務啟動每個標的的訂單流引擎（於 lifespan 呼叫）。"""
+    global _engine_tasks
     cfg = load_config()
     _setup_logging(cfg.log_level)
     if not (cfg.telegram_bot_token and cfg.telegram_chat_id):
         log.warning("未設定 Telegram 憑證，訂單流引擎未啟動（/health 仍可用）")
         return
     dispatcher = TelegramDispatcher(cfg.telegram_bot_token, cfg.telegram_chat_id, cfg.telegram_proxy_url)
-    engine = OrderflowEngine(cfg, dispatcher)
-    try:
-        symbol = await asyncio.to_thread(engine.resolve)
-    except Exception as exc:  # noqa: BLE001 - 限流時沿用預設代碼，稍後自動重試
-        symbol = engine.symbol
-        log.warning("合約代碼解析失敗（%s），沿用預設 %s，稍後自動重試", exc, symbol)
-    _engine_task = asyncio.create_task(engine.run_forever(), name="binance-orderflow")
+    budget = AlertBudget(cfg.orderflow_max_alerts_per_hour)
+    tasks: list[asyncio.Task] = []
+    started: list[str] = []
+    for code in cfg.binance_symbols:
+        engine = OrderflowEngine(cfg, dispatcher, symbol=code, budget=budget)
+        try:
+            await asyncio.to_thread(engine.resolve)
+        except Exception as exc:  # noqa: BLE001 - 限流時沿用預設代碼，稍後自動重試
+            log.warning("%s 合約代碼解析失敗（%s），沿用預設，稍後自動重試", code, exc)
+        tasks.append(asyncio.create_task(engine.run_forever(), name=f"orderflow-{engine.symbol}"))
+        started.append(engine.symbol)
+    _engine_tasks = tasks
     log.info(
-        "訂單流引擎已啟動：%s（單筆 >= $%s｜%d 秒同向 >= $%s）",
-        symbol,
-        f"{engine.block_usd:,.0f}",
-        int(engine.window_ms / 1000),
-        f"{engine.window_usd:,.0f}",
+        "訂單流引擎已啟動 %d 個標的：%s（全頻道上限 %d 則/小時）",
+        len(tasks),
+        ",".join(started),
+        cfg.orderflow_max_alerts_per_hour,
     )
 
 
@@ -127,10 +131,11 @@ async def _lifespan(_app: FastAPI):
     except Exception:  # noqa: BLE001 - 引擎失敗不阻斷 /health
         log.exception("訂單流引擎啟動失敗（服務照常提供 /health）")
     yield
-    if _engine_task is not None and not _engine_task.done():
-        _engine_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await _engine_task
+    for task in _engine_tasks:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
 
 
 app = FastAPI(title="clusdt crude oil bot", lifespan=_lifespan)
@@ -173,6 +178,7 @@ def _parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument("--interval", type=int, default=300, help="--loop 的間隔秒數（預設 300）")
     parser.add_argument("--limit", type=int, default=None, help="每輪最多推播則數（預設讀 MAX_ALERTS_PER_RUN）")
+    parser.add_argument("--symbol", default=None, help="只處理單一標的（如 BTCUSDT / CLUSDT）；預設讀 BINANCE_SYMBOLS 全部")
     parser.add_argument("--dry-run", action="store_true", help="只顯示訊息，不實際發送、不更新狀態")
     parser.add_argument("--force", action="store_true", help="忽略門檻與去重（搭配 --orderflow / --cftc）")
     return parser.parse_args(argv)
@@ -227,7 +233,7 @@ def main(argv=None) -> int:
         return run_health(cfg)
 
     if args.ws_test is not None:
-        return run_ws_test(cfg, float(max(5, args.ws_test)))
+        return run_ws_test(cfg, float(max(5, args.ws_test)), symbol=args.symbol)
 
     _require_env(cfg)
 
@@ -252,7 +258,7 @@ def main(argv=None) -> int:
         return 0
 
     if args.orderflow:
-        return run_orderflow_cli(cfg, tools.tg, dry_run=args.dry_run, force=args.force)
+        return run_orderflow_cli(cfg, tools.tg, dry_run=args.dry_run, force=args.force, symbol=args.symbol)
 
     if args.cftc:
         sent = run_cftc_cycle(cfg, tools.tg, tools.state, dry_run=args.dry_run, force=args.force)

@@ -1,8 +1,10 @@
 # clusdt — 幣安原油訂單流與即時新聞 Telegram 機器人
 
-**市場訊號 100% 規則化**：以 **Binance USDT-M 公共 WebSocket／REST**（`CLUSDT` 原油永續）
-為唯一權威來源——逐筆主動吃單、機構級大單、動能突破、巨量吸收、量價背離、24h 關鍵位與 ATR 止損。
-新聞管道為「嚴格時間窗＋內文爬取＋免費直譯」，並以 **DeepSeek Flash 僅做 0–10 重要性評分**
+**市場訊號 100% 規則化**：以 **Binance USDT-M 公共 WebSocket／REST** 為唯一權威來源，
+支援多標的——**CL 原油、BTC、ETH、SOL、XRP、LINK、ENA、XAU 黃金、XAG 白銀**——
+逐筆主動吃單、機構級大單、動能突破、巨量吸收、量價背離、24h 關鍵位與 ATR 止損；
+每個標的依 24h 成交額**自動校準門檻**（BTC 與 LINK 流量差 ~80 倍）。
+新聞管道為「嚴格時間窗＋內文爬取＋免費直譯」，並以 **DeepSeek Flash 僅做 0–10 重要性評分＋受影響資產標記**
 過濾無關新聞（不生成敘事、不做情緒判斷、不構成投資建議）；CFTC Managed Money 籌碼為輔助。
 
 ## 運作流程
@@ -78,7 +80,11 @@ python -m venv .venv
 | `ARTICLE_PARAGRAPH_LIMIT` | 內文擷取段數（預設 3） |
 | `TRANSLATE_TARGET` | 翻譯目標語言（預設 `zh-TW`） |
 | `MARKETAUX_MIN_INTERVAL_SEC` | Marketaux 輪詢最小間隔秒數（預設 1800） |
-| `BINANCE_SYMBOL` | 合約代碼（預設 `CLUSDT`；`OILUSDT` 為無效代碼） |
+| `BINANCE_SYMBOL` | 單一合約代碼（預設 `CLUSDT`；`OILUSDT` 為無效代碼） |
+| `BINANCE_SYMBOLS` | 多標的清單（逗號分隔；預設 CLUSDT,BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,LINKUSDT,ENAUSDT,XAUUSDT,XAGUSDT） |
+| `ORDERFLOW_AUTO_CALIBRATE` / `ORDERFLOW_CALIBRATION_FACTOR` | 自動門檻校準（預設開啟；係數 4.5 × 15 秒平均流量） |
+| `ORDERFLOW_MIN_WINDOW_USD` / `ORDERFLOW_MAX_WINDOW_USD` | 校準地板／天花板（預設 $100k / $12M） |
+| `ORDERFLOW_MAX_ALERTS_PER_HOUR` | 全頻道每小時警報上限（預設 20；0 = 不限） |
 | `ORDERFLOW_BLOCK_USD` | 單筆主動吃單門檻（預設 500000） |
 | `ORDERFLOW_WINDOW_USD` | 滾動窗口同向累計門檻（預設 1000000） |
 | `ORDERFLOW_WINDOW_SEC` | 滾動窗口秒數（預設 15） |
@@ -110,7 +116,8 @@ python -m venv .venv
 ```powershell
 .venv\Scripts\python.exe main.py --health               # 資料源健檢（建議先跑）
 .venv\Scripts\python.exe main.py --ping                 # 發送連線測試訊息
-.venv\Scripts\python.exe main.py --orderflow            # 訂單流快照（現價/24h 高低/ATR/門檻）
+.venv\Scripts\python.exe main.py --orderflow            # 多標的快照（現價/24h/ATR/校準門檻）
+.venv\Scripts\python.exe main.py --orderflow --symbol BTCUSDT  # 單一標的詳細資料
 .venv\Scripts\python.exe main.py --orderflow --force    # 加發一則示範警報（驗證 Telegram 格式）
 .venv\Scripts\python.exe main.py --ws-test 60           # 實時監聽 60 秒（印統計，不發送任何訊息）
 .venv\Scripts\python.exe main.py --news                 # 即時新聞掃描（20 分鐘窗 + 直譯）
@@ -149,7 +156,10 @@ python -m venv .venv
 
 | 項目 | 規則 |
 | --- | --- |
-| 資料串流 | `wss://fstream.binance.com/stream?streams=clusdt@trade`（逐筆成交，含 `m` 主動方向） |
+| 資料串流 | 每個標的一條 `wss://fstream.binance.com/stream?streams=<symbol>@trade`（逐筆成交，含 `m` 主動方向） |
+| 支援標的 | `BINANCE_SYMBOLS`：CLUSDT、BTCUSDT、ETHUSDT、SOLUSDT、XRPUSDT、LINKUSDT、ENAUSDT、XAUUSDT、XAGUSDT（可自由增減） |
+| 自動校準 | 每標的 `15s 窗口 = 4.5 ×（24h 成交額 / 5760）`，單筆 = 窗口/2、動能/吸收/背離 = 2–3×窗口；含地板 `$100k` 與天花板 `$12M` |
+| 全頻道預算 | `ORDERFLOW_MAX_ALERTS_PER_HOUR`（預設 20）跨所有標的共用，防多品種同時刷頻 |
 | 主動方向 | `m=False` → 主動買（做多 🟢）；`m=True` → 主動賣（做空 🔴） |
 | 開頭號誌燈 | 做多 = 綠燈 🟢；做空 = 紅燈 🔴（紅綠燈語意，一眼分辨 Call / Put） |
 | 觸發 A | 單筆吃單名義金額 >= `ORDERFLOW_BLOCK_USD`（預設 $500,000） |
