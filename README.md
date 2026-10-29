@@ -84,12 +84,12 @@ python -m venv .venv
 | `TRANSLATE_TARGET` | 翻譯目標語言（預設 `zh-TW`） |
 | `MARKETAUX_MIN_INTERVAL_SEC` | Marketaux 輪詢最小間隔秒數（預設 1800） |
 | `BINANCE_SYMBOL` | 單一合約代碼（預設 `CLUSDT`；`OILUSDT` 為無效代碼） |
-| `BINANCE_SYMBOLS` | 多標的清單（逗號分隔；預設 CLUSDT,BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,LINKUSDT,ENAUSDT,XAUUSDT,XAGUSDT） |
+| `BINANCE_SYMBOLS` | 多標的清單（預設 23 個：CL/BTC/ETH/SOL/XRP/LINK/ENA/XAU/XAG/BNB/COIN/HOOD/SPCX/CRCL/MU/SNDK + MAG7×7 各自獨立） |
 | `ORDERFLOW_AUTO_CALIBRATE` / `ORDERFLOW_CALIBRATION_FACTOR` | 自動門檻校準（預設開啟；係數 4.5 × 15 秒平均流量） |
 | `ORDERFLOW_MIN_WINDOW_USD` / `ORDERFLOW_MAX_WINDOW_USD` | 校準地板／天花板（預設 $100k / $12M） |
 | `ORDERFLOW_MAX_ALERTS_PER_HOUR` | 全頻道每小時警報上限（預設 20；0 = 不限） |
 | `ORDERFLOW_MIN_GRADE` | 最低訊號評級（`C` 不過濾；`B` 只發 B 以上；`A` 只發 A） |
-| `EQUITY_SYMBOLS` / `EQUITY_CACHE_TTL_SEC` | 股票分析清單（預設 GOOGL,TSLA）與快取秒數（預設 21600） |
+| `EQUITY_SYMBOLS` / `EQUITY_CACHE_TTL_SEC` | 股票分析清單（預設 13 檔：GOOGL、TSLA、AAPL、MSFT、NVDA、AMZN、META、COIN、HOOD、SPCX、CRCL、MU、SNDK）與快取秒數（預設 21600） |
 | `ORDERFLOW_BLOCK_USD` | 單筆主動吃單門檻（預設 500000） |
 | `ORDERFLOW_WINDOW_USD` | 滾動窗口同向累計門檻（預設 1000000） |
 | `ORDERFLOW_WINDOW_SEC` | 滾動窗口秒數（預設 15） |
@@ -166,7 +166,8 @@ python -m venv .venv
 | 項目 | 規則 |
 | --- | --- |
 | 資料串流 | 每個標的一條 `wss://fstream.binance.com/stream?streams=<symbol>@trade`（逐筆成交，含 `m` 主動方向） |
-| 支援標的 | `BINANCE_SYMBOLS`：CLUSDT、BTCUSDT、ETHUSDT、SOLUSDT、XRPUSDT、LINKUSDT、ENAUSDT、XAUUSDT、XAGUSDT（可自由增減） |
+| 支援標的 | `BINANCE_SYMBOLS`（預設 23 個）：CL 原油、BTC、ETH、SOL、XRP、LINK、ENA、XAU 黃金、XAG 白銀、BNB、COIN、HOOD、SPCX、CRCL、MU、SNDK，以及 MAG7 七檔（NVDA、MSFT、AAPL、AMZN、META、GOOGL、TSLA）各自獨立合約 |
+| 可選擴充 | Binance 另有 XPT 鉑金、XPD 鈀金、COPPER 銅、BZ Brent、NATGAS、QQQ／SPY／IWM、MSTR、PLTR、AMD、ARM、ASML、SKHYNIX 等 TradFi 永續，直接加入 `BINANCE_SYMBOLS` 即可 |
 | 自動校準 | 每標的 `15s 窗口 = 4.5 ×（24h 成交額 / 5760）`，單筆 = 窗口/2、動能/吸收/背離 = 2–3×窗口；含地板 `$100k` 與天花板 `$12M` |
 | 全頻道預算 | `ORDERFLOW_MAX_ALERTS_PER_HOUR`（預設 20）跨所有標的共用，防多品種同時刷頻 |
 | 主動方向 | `m=False` → 主動買（做多 🟢）；`m=True` → 主動賣（做空 🔴） |

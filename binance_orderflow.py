@@ -88,10 +88,32 @@ SYMBOL_LABELS = {
     "XRPUSDT": "XRP",
     "LINKUSDT": "LINK",
     "ENAUSDT": "ENA",
+    "BNBUSDT": "BNB",
     "XAUUSDT": "XAU 黃金",
     "XAGUSDT": "XAG 白銀",
     "PAXGUSDT": "PAXG 黃金",
+    "XPTUSDT": "XPT 鉑金",
+    "XPDUSDT": "XPD 鈀金",
+    "COPPERUSDT": "銅",
+    "BZUSDT": "Brent",
+    "NATGASUSDT": "天然氣",
     "CLUSDT": "CL 原油",
+    "COINUSDT": "COIN",
+    "HOODUSDT": "HOOD",
+    "SPCXUSDT": "SPCX",
+    "CRCLUSDT": "CRCL",
+    "MUUSDT": "MU",
+    "SNDKUSDT": "SNDK",
+    "SKHYNIXUSDT": "SK Hynix",
+    "GOOGLUSDT": "GOOGL",
+    "TSLAUSDT": "TSLA",
+    "NVDAUSDT": "NVDA",
+    "METAUSDT": "META",
+    "AAPLUSDT": "AAPL",
+    "MSFTUSDT": "MSFT",
+    "AMZNUSDT": "AMZN",
+    "MSTRUSDT": "MSTR",
+    "PLTRUSDT": "PLTR",
 }
 KIND_LABELS = {
     "sweep": "異動",
@@ -336,7 +358,14 @@ def fetch_atr(
 
 
 def resolve_symbol(session: requests.Session, preferred: str = "") -> str:
-    """確定實際可用的 Binance 合約代碼（CLUSDT / OILUSDT / exchangeInfo 掃描）。"""
+    """確定實際可用的 Binance 合約代碼（CLUSDT / OILUSDT / exchangeInfo 掃描）。
+
+    已知代碼（非 CLUSDT/OILUSDT）直接採信，不再額外打 ticker——
+    多標的啟動時少 23 次 REST 呼叫，避免瞬間權重超限。
+    """
+    code = (preferred or "").strip().upper()
+    if code and code not in CANDIDATE_SYMBOLS:
+        return code
     candidates: list[str] = []
     for item in (preferred, *CANDIDATE_SYMBOLS):
         code = (item or "").strip().upper()
@@ -1092,6 +1121,7 @@ def run_orderflow_cli(
             print(f"❌ {code} 行情基準不可用")
             continue
         engines.append(engine)
+        time.sleep(0.15)  # 錯峰查詢，降低瞬時權重
     if not engines:
         return 1
     if symbol:
@@ -1152,6 +1182,7 @@ def run_ws_test(cfg, seconds: float = 30.0, symbol: str | None = None) -> int:
             except Exception as exc:  # noqa: BLE001 - 限流時沿用預設代碼
                 log.warning("%s 代碼解析失敗（%s），沿用預設", code, exc)
             engines.append(engine)
+            await asyncio.sleep(0.2)  # 錯峰連線，避免同時觸發 REST 刷新
         tasks = [asyncio.create_task(engine.run_forever()) for engine in engines]
         try:
             await asyncio.sleep(seconds)

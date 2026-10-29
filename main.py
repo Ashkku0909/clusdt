@@ -116,6 +116,7 @@ async def _start_orderflow_engine() -> None:
             log.warning("%s 合約代碼解析失敗（%s），沿用預設，稍後自動重試", code, exc)
         tasks.append(asyncio.create_task(engine.run_forever(), name=f"orderflow-{engine.symbol}"))
         started.append(engine.symbol)
+        await asyncio.sleep(0.25)  # 錯峰啟動，避免 23 個標的同時打 REST
     _engine_tasks = tasks
     log.info(
         "訂單流引擎已啟動 %d 個標的：%s（全頻道上限 %d 則/小時）",

@@ -35,6 +35,7 @@ CATALOGS = {
     49: ("公告", "medium"),
 }
 WATCH_TOKENS = ("BTC", "ETH", "SOL", "XRP", "LINK", "ENA", "XAU", "XAG", "PAXG", "CL")
+FIXED_ASSETS = ("CL", "XAU", "XAG", "PAXG", "XPT", "XPD", "COPPER", "BZ", "NATGAS")
 SEEN_SECTION = "binance_news_seen"
 MAX_SEEN = 500
 
@@ -98,16 +99,29 @@ def fetch_announcements(session: requests.Session, page_size: int = 20) -> list[
     return items
 
 
-def matched_assets(title: str) -> list[str]:
-    tokens = {token.upper() for token in re.findall(r"\b[A-Za-z0-9]{2,10}\b", title)}
-    return [asset for asset in WATCH_TOKENS if asset in tokens]
+def watch_tokens(cfg) -> tuple[str, ...]:
+    """由 BINANCE_SYMBOLS / EQUITY_SYMBOLS 動態產生觀察名單（含商品固定清單）。"""
+    tokens = set(FIXED_ASSETS)
+    for symbol in getattr(cfg, "binance_symbols", ()):
+        base = str(symbol).upper().replace("USDT", "").replace("USD1", "")
+        if base:
+            tokens.add(base)
+    for symbol in getattr(cfg, "equity_symbols", ()):
+        tokens.add(str(symbol).upper())
+    return tuple(sorted(tokens))
 
 
-def is_relevant(announcement: Announcement) -> tuple[bool, list[str]]:
-    assets = matched_assets(announcement.title)
+def matched_assets(title: str, tokens: tuple[str, ...]) -> list[str]:
+    # 只匹配大寫代碼（避免 "coin" 這類普通單字誤判）
+    words = set(re.findall(r"\b[A-Z0-9]{2,12}\b", title))
+    return [asset for asset in tokens if asset in words]
+
+
+def is_relevant(announcement: Announcement, tokens: tuple[str, ...]) -> tuple[bool, list[str]]:
+    assets = matched_assets(announcement.title, tokens)
     if assets:
         return True, assets
-    # TradFi 類（XAU/XAG/CL 都是 TradFi perps；費率/槓桿/新合約變動都相關）
+    # TradFi 類（XAU/XAG/CL 等 TradFi perps；費率/槓桿/新合約變動都相關）
     if re.search(r"tradfi", announcement.title, flags=re.IGNORECASE):
         return True, ["XAU/XAG/CL"]
     # 全市場期貨維護/升級（影響所有合約）
@@ -156,6 +170,7 @@ def run_binance_news_cycle(cfg, dispatcher, state, dry_run: bool = False) -> int
         return 0
 
     seen = state.get_section(SEEN_SECTION)
+    tokens = watch_tokens(cfg)
     cutoff_ms = int(time.time() * 1000) - int(cfg.binance_news_max_age_hours) * 3600 * 1000
     sent = 0
     for announcement in announcements:
@@ -165,7 +180,7 @@ def run_binance_news_cycle(cfg, dispatcher, state, dry_run: bool = False) -> int
             continue
         if announcement.code in seen:
             continue
-        relevant, assets = is_relevant(announcement)
+        relevant, assets = is_relevant(announcement, tokens)
         if not relevant:
             continue
 

@@ -63,6 +63,21 @@ DEFAULT_SYMBOLS: tuple[str, ...] = (
     "ENAUSDT",
     "XAUUSDT",
     "XAGUSDT",
+    "BNBUSDT",
+    "COINUSDT",
+    "HOODUSDT",
+    "SPCXUSDT",
+    "CRCLUSDT",
+    "MUUSDT",
+    "SNDKUSDT",
+    # Magnificent 7（各自獨立合約）
+    "NVDAUSDT",
+    "MSFTUSDT",
+    "AAPLUSDT",
+    "AMZNUSDT",
+    "METAUSDT",
+    "GOOGLUSDT",
+    "TSLAUSDT",
 )
 
 
@@ -129,7 +144,21 @@ class Config:
     orderflow_max_alerts_per_hour: int = 20
     orderflow_min_grade: str = "C"  # A/B/C；C = 不過濾
     # 股票基本面分析（Finnhub + DeepSeek；快取於 data/equities）
-    equity_symbols: tuple[str, ...] = ("GOOGL", "TSLA")
+    equity_symbols: tuple[str, ...] = (
+        "GOOGL",
+        "TSLA",
+        "AAPL",
+        "MSFT",
+        "NVDA",
+        "AMZN",
+        "META",
+        "COIN",
+        "HOOD",
+        "SPCX",
+        "CRCL",
+        "MU",
+        "SNDK",
+    )
     equity_cache_ttl_sec: int = 21600
     # Binance 官方公告（上幣／下架／維護）
     binance_news_enabled: bool = True
@@ -210,7 +239,10 @@ def load_config() -> Config:
         orderflow_max_window_usd=_env_float("ORDERFLOW_MAX_WINDOW_USD", 12_000_000.0),
         orderflow_max_alerts_per_hour=_env_int("ORDERFLOW_MAX_ALERTS_PER_HOUR", 20),
         orderflow_min_grade=_env("ORDERFLOW_MIN_GRADE", "C").upper(),
-        equity_symbols=_env_list("EQUITY_SYMBOLS", ("GOOGL", "TSLA")),
+        equity_symbols=_env_list(
+            "EQUITY_SYMBOLS",
+            ("GOOGL", "TSLA", "AAPL", "MSFT", "NVDA", "AMZN", "META", "COIN", "HOOD", "SPCX", "CRCL", "MU", "SNDK"),
+        ),
         equity_cache_ttl_sec=_env_int("EQUITY_CACHE_TTL_SEC", 21600),
         binance_news_enabled=_env_bool("BINANCE_NEWS_ENABLED", True),
         binance_news_max_age_hours=_env_int("BINANCE_NEWS_MAX_AGE_HOURS", 12),

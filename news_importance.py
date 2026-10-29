@@ -35,8 +35,36 @@ ASSET_LABELS = {
     "XRP": "XRP",
     "LINK": "LINK",
     "ENA": "ENA",
+    "BNB": "BNB",
+    "DOGE": "DOGE",
+    "ADA": "ADA",
+    "AVAX": "AVAX",
+    "SUI": "SUI",
+    "HYPE": "HYPE",
+    "NEAR": "NEAR",
+    "LTC": "LTC",
+    "BCH": "BCH",
     "XAU": "黃金",
     "XAG": "白銀",
+    "XPT": "鉑金",
+    "XPD": "鈀金",
+    "COPPER": "銅",
+    "BZ": "Brent",
+    "NATGAS": "天然氣",
+    "COIN": "COIN",
+    "HOOD": "HOOD",
+    "SPCX": "SPCX",
+    "CRCL": "CRCL",
+    "MU": "MU",
+    "SNDK": "SNDK",
+    "SKHYNIX": "SK Hynix",
+    "GOOGL": "GOOGL",
+    "TSLA": "TSLA",
+    "NVDA": "NVDA",
+    "META": "META",
+    "AAPL": "AAPL",
+    "MSFT": "MSFT",
+    "AMZN": "AMZN",
 }
 ASSET_ALIASES = {
     "OIL": "CL",
@@ -44,23 +72,42 @@ ASSET_ALIASES = {
     "CRUDE": "CL",
     "GOLD": "XAU",
     "SILVER": "XAG",
+    "PLATINUM": "XPT",
+    "PALLADIUM": "XPD",
+    "BRENT": "BZ",
 }
 
-SYSTEM_PROMPT = (
-    "You are a strict crypto/commodity news triage filter for an automated alert bot "
-    "watching CL (crude oil), BTC, ETH, SOL, XRP, LINK, ENA, XAU (gold), XAG (silver). "
+SYSTEM_PROMPT_TEMPLATE = (
+    "You are a strict market news triage filter for an automated alert bot watching these assets: "
+    "{ASSETS}. "
     "Score how likely the article is to materially move ANY of these assets within 24 hours (0-10). "
     "Consider: OPEC+ decisions, supply disruptions, sanctions, war or infrastructure attacks, "
-    "inventories (EIA/API), ETF/regulatory news, exchange/security incidents, demand data, "
-    "and major macro catalysts. "
+    "inventories (EIA/API), ETF/regulatory news, exchange/security incidents, earnings/guidance, "
+    "demand data, and major macro catalysts. "
     "Treat as LOW importance: price recaps, technical-analysis pieces, opinion, minor token news, "
     "unrelated markets, and stale content without a new catalyst. "
     'Return ONLY JSON: {"score": <integer 0-10>, '
     '"category": "<supply|demand|geopolitics|inventories|macro|other>", '
     '"reason": "<max 15 words>", "symbols": ["CL", "XAU"]}'
-    " Where symbols lists only affected assets from: CL, BTC, ETH, SOL, XRP, LINK, ENA, XAU, XAG"
-    " (empty array if none)."
+    " Where symbols lists only affected assets from the watched list (empty array if none)."
 )
+
+
+def allowed_assets(cfg) -> tuple[str, ...]:
+    """由設定推導可標記資產（Binance 標的 base + 股票清單 + 商品固定項）。"""
+    assets: set[str] = {"CL", "XAU", "XAG", "XPT", "XPD", "COPPER", "BZ", "NATGAS"}
+    for symbol in getattr(cfg, "binance_symbols", ()):
+        base = str(symbol).upper().replace("USDT", "").replace("USD1", "")
+        if base:
+            assets.add(ASSET_ALIASES.get(base, base))
+    for symbol in getattr(cfg, "equity_symbols", ()):
+        assets.add(str(symbol).upper())
+    return tuple(sorted(assets))
+
+
+def system_prompt(cfg) -> str:
+    return SYSTEM_PROMPT_TEMPLATE.replace("{ASSETS}", ", ".join(allowed_assets(cfg)))
+
 
 
 @dataclass(slots=True, frozen=True)
@@ -121,7 +168,7 @@ def score_news(cfg, title: str, body: str) -> NewsVerdict | None:
                 json={
                     "model": cfg.deepseek_model,
                     "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "system", "content": system_prompt(cfg)},
                         {"role": "user", "content": user_prompt},
                     ],
                     "temperature": 0,
