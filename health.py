@@ -131,11 +131,20 @@ def run_health(cfg: Config) -> int:
         f"｜資料代理: {cfg.data_proxy_url or '直連'}"
         f"｜新聞時效窗: {cfg.news_max_age_minutes} 分鐘｜每輪上限: {cfg.max_alerts_per_run} 則"
     )
+    if cfg.orderflow_auto_calibrate:
+        threshold_text = (
+            f"自動校準（{cfg.orderflow_calibration_factor:g}×15s 均流，"
+            f"地板 ${cfg.orderflow_min_window_usd:,.0f}／天花板 ${cfg.orderflow_max_window_usd:,.0f}）"
+        )
+    else:
+        threshold_text = (
+            f"固定（單筆 ${cfg.orderflow_block_usd:,.0f}／"
+            f"{cfg.orderflow_window_sec}s ${cfg.orderflow_window_usd:,.0f}）"
+        )
     print(
-        f"🛢  訂單流門檻: 單筆 >= ${cfg.orderflow_block_usd:,.0f}"
-        f"｜{cfg.orderflow_window_sec}s 同向 >= ${cfg.orderflow_window_usd:,.0f}"
+        f"🛢  多標的: {len(cfg.binance_symbols)} 個｜門檻 {threshold_text}"
         f"｜關鍵位 ±{cfg.orderflow_sr_proximity_pct:.2f}%｜止損 {cfg.orderflow_atr_mult:g}×ATR"
-        f"｜方向冷卻 {cfg.orderflow_cooldown_sec}s"
+        f"｜全頻道上限 {cfg.orderflow_max_alerts_per_hour} 則/小時"
     )
     if required_failed:
         print("❌ 核心連線失敗：請檢查 .env 與網路／代理設定。")
