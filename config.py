@@ -122,13 +122,13 @@ class Config:
     orderflow_atr_period: int = 14
     orderflow_atr_mult: float = 1.5
     orderflow_kline_interval: str = "1h"
-    orderflow_tp1_atr_mult: float = 2.0
-    orderflow_tp2_atr_mult: float = 4.0
-    orderflow_min_tp1_pct: float = 0.6
-    orderflow_cooldown_sec: int = 300
+    orderflow_tp1_atr_mult: float = 3.0
+    orderflow_tp2_atr_mult: float = 5.0
+    orderflow_min_tp1_pct: float = 1.2
+    orderflow_cooldown_sec: int = 900
     orderflow_ta_refresh_sec: int = 300
-    orderflow_min_gap_sec: int = 900
-    orderflow_min_move_pct: float = 0.35
+    orderflow_min_gap_sec: int = 1800
+    orderflow_min_move_pct: float = 0.8
     orderflow_snapshot_max_age_sec: int = 10800
     # 額外訊號（多樣性；可分別關閉）
     orderflow_enable_momentum: bool = True
@@ -146,7 +146,7 @@ class Config:
     orderflow_min_window_usd: float = 100_000.0
     orderflow_max_window_usd: float = 12_000_000.0
     orderflow_max_alerts_per_hour: int = 20
-    orderflow_min_grade: str = "C"  # A/B/C；C = 不過濾
+    orderflow_min_grade: str = "B"  # A/B/C；C = 不過濾
     # 股票基本面分析（Finnhub + DeepSeek；快取於 data/equities）
     equity_symbols: tuple[str, ...] = (
         "GOOGL",
@@ -224,13 +224,13 @@ def load_config() -> Config:
         orderflow_atr_period=_env_int("ORDERFLOW_ATR_PERIOD", 14),
         orderflow_atr_mult=_env_float("ORDERFLOW_ATR_MULT", 1.5),
         orderflow_kline_interval=_env("ORDERFLOW_KLINE_INTERVAL", "1h"),
-        orderflow_tp1_atr_mult=_env_float("ORDERFLOW_TP1_ATR_MULT", 2.0),
-        orderflow_tp2_atr_mult=_env_float("ORDERFLOW_TP2_ATR_MULT", 4.0),
-        orderflow_min_tp1_pct=_env_float("ORDERFLOW_MIN_TP1_PCT", 0.6),
-        orderflow_cooldown_sec=_env_int("ORDERFLOW_COOLDOWN_SEC", 300),
+        orderflow_tp1_atr_mult=_env_float("ORDERFLOW_TP1_ATR_MULT", 3.0),
+        orderflow_tp2_atr_mult=_env_float("ORDERFLOW_TP2_ATR_MULT", 5.0),
+        orderflow_min_tp1_pct=_env_float("ORDERFLOW_MIN_TP1_PCT", 1.2),
+        orderflow_cooldown_sec=_env_int("ORDERFLOW_COOLDOWN_SEC", 900),
         orderflow_ta_refresh_sec=_env_int("ORDERFLOW_TA_REFRESH_SEC", 300),
-        orderflow_min_gap_sec=_env_int("ORDERFLOW_MIN_GAP_SEC", 900),
-        orderflow_min_move_pct=_env_float("ORDERFLOW_MIN_MOVE_PCT", 0.35),
+        orderflow_min_gap_sec=_env_int("ORDERFLOW_MIN_GAP_SEC", 1800),
+        orderflow_min_move_pct=_env_float("ORDERFLOW_MIN_MOVE_PCT", 0.8),
             orderflow_snapshot_max_age_sec=_env_int("ORDERFLOW_SNAPSHOT_MAX_AGE_SEC", 10800),
         orderflow_enable_momentum=_env_bool("ORDERFLOW_ENABLE_MOMENTUM", True),
         orderflow_momentum_usd=_env_float("ORDERFLOW_MOMENTUM_USD", 2_000_000.0),
@@ -246,7 +246,7 @@ def load_config() -> Config:
         orderflow_min_window_usd=_env_float("ORDERFLOW_MIN_WINDOW_USD", 100_000.0),
         orderflow_max_window_usd=_env_float("ORDERFLOW_MAX_WINDOW_USD", 12_000_000.0),
         orderflow_max_alerts_per_hour=_env_int("ORDERFLOW_MAX_ALERTS_PER_HOUR", 20),
-        orderflow_min_grade=_env("ORDERFLOW_MIN_GRADE", "C").upper(),
+        orderflow_min_grade=_env("ORDERFLOW_MIN_GRADE", "B").upper(),
         equity_symbols=_env_list(
             "EQUITY_SYMBOLS",
             ("GOOGL", "TSLA", "AAPL", "MSFT", "NVDA", "AMZN", "META", "COIN", "HOOD", "SPCX", "CRCL", "MU", "SNDK"),

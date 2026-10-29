@@ -53,17 +53,17 @@ services:
       - key: ORDERFLOW_KLINE_INTERVAL
         value: "1h"
       - key: ORDERFLOW_TP1_ATR_MULT
-        value: "2.0"
+        value: "3.0"
       - key: ORDERFLOW_TP2_ATR_MULT
-        value: "4.0"
+        value: "5.0"
       - key: ORDERFLOW_MIN_TP1_PCT
-        value: "0.6"
+        value: "1.2"
       - key: ORDERFLOW_COOLDOWN_SEC
-        value: "300"
-      - key: ORDERFLOW_MIN_GAP_SEC
         value: "900"
+      - key: ORDERFLOW_MIN_GAP_SEC
+        value: "1800"
       - key: ORDERFLOW_MIN_MOVE_PCT
-        value: "0.35"
+        value: "0.8"
       - key: ORDERFLOW_SNAPSHOT_MAX_AGE_SEC
         value: "10800"
       - key: ORDERFLOW_ENABLE_MOMENTUM
@@ -79,7 +79,7 @@ services:
       - key: ORDERFLOW_MAX_ALERTS_PER_HOUR
         value: "20"
       - key: ORDERFLOW_MIN_GRADE
-        value: "C"
+        value: "B"
       - key: EQUITY_SYMBOLS
         value: "GOOGL,TSLA,AAPL,MSFT,NVDA,AMZN,META,COIN,HOOD,SPCX,CRCL,MU,SNDK"
       - key: EQUITY_CACHE_TTL_SEC

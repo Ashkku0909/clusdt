@@ -46,8 +46,9 @@
   失敗僅指數退避重試（418/429 熔斷），**絕不逐筆重試**；
   磁碟快取（data/baseline 與 baseline_seed.json）讓限流期間仍可運作；
   行情基準超過 ORDERFLOW_SNAPSHOT_MAX_AGE_SEC（預設 10800s）才完全停發
-- 每個方向獨立冷卻（預設 300s），外加全域最小警報間隔 ORDERFLOW_MIN_GAP_SEC（預設 900s）
-  與同方向最小價格推移 ORDERFLOW_MIN_MOVE_PCT（預設 0.35%）——三層防刷頻
+- 每個方向獨立冷卻（預設 900s），外加全域最小警報間隔 ORDERFLOW_MIN_GAP_SEC（預設 1800s）
+  與同方向最小價格推移 ORDERFLOW_MIN_MOVE_PCT（預設 0.8%）——三層防刷頻；
+  評級預設 ORDERFLOW_MIN_GRADE=B（A/B 才發），技術面不可用時需流量 >= 動能門檻才發
 - ``run_forever()`` 為 asyncio 任務，於 FastAPI lifespan 以 ``asyncio.create_task`` 常駐
 """
 
@@ -445,6 +446,7 @@ def format_orderflow_alert(signal: OrderflowSignal) -> str:
         f"方向：{DIRECTION_LABELS[signal.direction]}",
         f"進場位：${_fmt_price(entry)}",
         f"進場區間：${_fmt_price(signal.entry_low)} – ${_fmt_price(signal.entry_high)}（限價）",
+        "執行：30 分鐘內未成交、或價格已超出區間 0.5×ATR 則放棄本單",
         f"止損位：${_fmt_price(signal.stop_loss)}（{_pct(signal.stop_loss)}｜ATR {signal.atr_mult:g}x）",
         f"止盈：TP1 ${_fmt_price(signal.tp1)}（{_pct(signal.tp1)}）"
         f"｜TP2 ${_fmt_price(signal.tp2)}（{_pct(signal.tp2)}）",
@@ -1115,11 +1117,21 @@ class OrderflowEngine:
             self.stats["suppressed_grade"] += 1
             log.debug("評級 %s（%d 分）低於門檻 %s，壓制", grade, score, self.min_grade)
             return None
-        # 技術面不可用時，量價背離沒有參考點（純靠 TA 反向）→ 不發
-        if grade == "—" and candidate.kind == "divergence":
-            self.stats["suppressed_grade"] += 1
-            log.debug("技術面不可用，壓制量價背離訊號")
-            return None
+        # 技術面不可用時，量價背離沒有參考點（純靠 TA 反向）→ 不發；
+        # 其餘訊號需流量 >= 動能門檻（約 2 倍窗口）才發，避免限流期間刷低質量單
+        if grade == "—":
+            if candidate.kind == "divergence":
+                self.stats["suppressed_grade"] += 1
+                log.debug("技術面不可用，壓制量價背離訊號")
+                return None
+            if candidate.notional < self.momentum_usd:
+                self.stats["suppressed_grade"] += 1
+                log.debug(
+                    "技術面不可用且流量 $%.0f < 動能門檻 $%.0f，壓制",
+                    candidate.notional,
+                    self.momentum_usd,
+                )
+                return None
 
         # --- 全域警報預算（所有標的共用 1 小時上限）---
         if self.budget is not None and not self.budget.allow(clock):
@@ -1129,14 +1141,14 @@ class OrderflowEngine:
 
         atr = self.atr
         if direction == "long":
-            entry_low, entry_high = price - 0.15 * atr, price + 0.05 * atr
+            entry_low, entry_high = price - 0.25 * atr, price + 0.10 * atr
             tp1, tp2 = price + self.tp1_mult * atr, price + self.tp2_mult * atr
+            # 止損必須在「進場區間下方」之外，避免止損落在限價區內
+            stop_loss = min(price - self.atr_mult * atr, entry_low - 0.2 * atr)
         else:
-            entry_low, entry_high = price - 0.05 * atr, price + 0.15 * atr
+            entry_low, entry_high = price - 0.10 * atr, price + 0.25 * atr
             tp1, tp2 = price - self.tp1_mult * atr, price - self.tp2_mult * atr
-        stop_loss = (
-            price - self.atr_mult * self.atr if direction == "long" else price + self.atr_mult * self.atr
-        )
+            stop_loss = max(price + self.atr_mult * atr, entry_high + 0.2 * atr)
         # 目標太近（跟單者喫不到、手續費+滑點就吞掉）→ 等更大波動再發
         tp1_pct = abs(tp1 - price) / price * 100.0
         if tp1_pct < self.min_tp1_pct:
