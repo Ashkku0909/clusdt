@@ -64,6 +64,8 @@ from typing import Deque, Iterable
 import requests
 import websockets
 
+from market_context import GRADE_RANK, MarketContext, context_line, fetch_market_context, grade_signal
+
 log = logging.getLogger(__name__)
 
 REST_BASE = "https://fapi.binance.com"
@@ -182,6 +184,13 @@ class OrderflowSignal:
     level_text: str
     trade_time: datetime
     kind: str = "sweep"
+    grade: str = "B"
+    score: int = 0
+    entry_low: float = 0.0
+    entry_high: float = 0.0
+    tp1: float = 0.0
+    tp2: float = 0.0
+    context_text: str = ""
 
 
 @dataclass(slots=True, frozen=True)
@@ -354,22 +363,35 @@ def resolve_symbol(session: requests.Session, preferred: str = "") -> str:
 # --------------------------------------------------------------------- #
 # 訊息模板（固定格式、無 LLM）
 # --------------------------------------------------------------------- #
+def _fmt_price(value: float) -> str:
+    """依價格量級選擇小數位（BTC 2 位、XRP 4 位、ENA 5 位）。"""
+    if value >= 1000:
+        return f"{value:,.2f}"
+    if value >= 1:
+        return f"{value:,.4f}"
+    return f"{value:,.5f}"
+
+
 def format_orderflow_alert(signal: OrderflowSignal) -> str:
     """依既定模板輸出警報（純文字，Telegram 端僅做 Markdown→HTML 轉義）。"""
-    return "\n".join(
-        [
-            f"{DIRECTION_LIGHTS[signal.direction]} 【{symbol_label(signal.symbol)} {KIND_LABELS.get(signal.kind, KIND_LABELS['sweep'])}】",
-            "━━━━━━━━━━━━━━━━━━",
-            f"方向：{DIRECTION_LABELS[signal.direction]}",
-            f"進場位：${signal.entry_price:,.2f}",
-            f"止損位：${signal.stop_loss:,.2f} (ATR {signal.atr_mult:g}x)",
-            f"性質：{signal.nature}",
-            f"大單金額：${signal.notional:,.0f}",
-            f"成交量：{signal.qty:,.2f} 手",
-            f"關鍵位置：{signal.level_text}",
-            "━━━━━━━━━━━━━━━━━━",
-        ]
-    )
+    lines = [
+        f"{DIRECTION_LIGHTS[signal.direction]} 【{symbol_label(signal.symbol)} {KIND_LABELS.get(signal.kind, KIND_LABELS['sweep'])}】",
+        "━━━━━━━━━━━━━━━━━━",
+        f"方向：{DIRECTION_LABELS[signal.direction]}",
+        f"進場位：${_fmt_price(signal.entry_price)}",
+        f"進場區間：${_fmt_price(signal.entry_low)} – ${_fmt_price(signal.entry_high)}（限價）",
+        f"止損位：${_fmt_price(signal.stop_loss)} (ATR {signal.atr_mult:g}x)",
+        f"止盈：TP1 ${_fmt_price(signal.tp1)}｜TP2 ${_fmt_price(signal.tp2)}",
+        f"評級：{signal.grade}（{signal.score} 分）",
+        f"性質：{signal.nature}",
+        f"大單金額：${signal.notional:,.0f}",
+        f"成交量：{signal.qty:,.2f} 手",
+        f"關鍵位置：{signal.level_text}",
+    ]
+    if signal.context_text:
+        lines.append(f"依據：{signal.context_text}")
+    lines.append("━━━━━━━━━━━━━━━━━━")
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------- #
@@ -433,6 +455,8 @@ class OrderflowEngine:
         self.min_window_usd = float(cfg.orderflow_min_window_usd)
         self.max_window_usd = float(cfg.orderflow_max_window_usd)
         self.budget = budget
+        self.context: MarketContext | None = None
+        self.min_grade = str(cfg.orderflow_min_grade).upper()
 
         self.dispatcher = dispatcher
         self.dry_run = dry_run
@@ -471,6 +495,7 @@ class OrderflowEngine:
             "signal_absorption": 0,
             "signal_divergence": 0,
             "suppressed_budget": 0,
+            "suppressed_grade": 0,
             "max_single_notional": 0.0,
             "max_buy_flow": 0.0,
             "max_sell_flow": 0.0,
@@ -552,6 +577,10 @@ class OrderflowEngine:
             self.snapshot = snapshot
             self.atr = atr
             self.apply_calibration(snapshot)
+            try:
+                self.context = fetch_market_context(self.session, self.symbol)
+            except Exception as exc:  # noqa: BLE001 - 上下文失敗不影響行情基準
+                log.warning("%s 市場上下文取得失敗（沿用舊值）：%s", self.symbol, exc)
             self._refresh_failures = 0
             self._next_refresh_at = time.monotonic() + self.ta_refresh_sec
             log.info(
@@ -803,12 +832,26 @@ class OrderflowEngine:
             )
             return None
 
+        # --- 多周期評級（ADX / CVD / OI / 資金費率；確定性）---
+        score, grade, reasons = grade_signal(self.context, direction, candidate.kind)
+        if GRADE_RANK.get(grade, 1) < GRADE_RANK.get(self.min_grade, 0):
+            self.stats["suppressed_grade"] += 1
+            log.debug("評級 %s（%d 分）低於門檻 %s，壓制", grade, score, self.min_grade)
+            return None
+
         # --- 全域警報預算（所有標的共用 1 小時上限）---
         if self.budget is not None and not self.budget.allow(clock):
             self.stats["suppressed_budget"] += 1
             log.debug("全域警報預算已滿（%d/小時），壓制", self.budget.max_per_hour)
             return None
 
+        atr = self.atr
+        if direction == "long":
+            entry_low, entry_high = price - 0.05 * atr, price + 0.02 * atr
+            tp1, tp2 = price + 1.5 * atr, price + 3.0 * atr
+        else:
+            entry_low, entry_high = price - 0.02 * atr, price + 0.05 * atr
+            tp1, tp2 = price - 1.5 * atr, price - 3.0 * atr
         stop_loss = (
             price - self.atr_mult * self.atr if direction == "long" else price + self.atr_mult * self.atr
         )
@@ -828,6 +871,13 @@ class OrderflowEngine:
             level_text=candidate.level_text,
             trade_time=datetime.fromtimestamp(event.trade_time_ms / 1000.0, tz=timezone.utc),
             kind=candidate.kind,
+            grade=grade,
+            score=score,
+            entry_low=entry_low,
+            entry_high=entry_high,
+            tp1=tp1,
+            tp2=tp2,
+            context_text=context_line(self.context, reasons),
         )
         self._cooldown_until[direction] = clock + self.cooldown_sec
         self._last_alert_at = clock
@@ -916,7 +966,7 @@ class OrderflowEngine:
     def stats_line(self) -> str:
         return (
             "trades=%d｜單筆巨量=%d｜窗口觸發=%d｜訊號=%d（sweep=%d/mom=%d/abs=%d/div=%d）"
-            "｜S/R 壓制=%d｜冷卻壓制=%d｜間隔壓制=%d｜同價壓制=%d｜過期壓制=%d｜預算壓制=%d"
+            "｜S/R 壓制=%d｜冷卻壓制=%d｜間隔壓制=%d｜同價壓制=%d｜過期壓制=%d｜預算壓制=%d｜評級壓制=%d"
             "｜單筆最大=$%.0f｜買峰=$%.0f｜賣峰=$%.0f"
             % (
                 self.stats["trades"],
@@ -933,6 +983,7 @@ class OrderflowEngine:
                 self.stats["suppressed_move"],
                 self.stats["suppressed_stale"],
                 self.stats["suppressed_budget"],
+                self.stats["suppressed_grade"],
                 self.stats["max_single_notional"],
                 self.stats["max_buy_flow"],
                 self.stats["max_sell_flow"],
@@ -978,6 +1029,8 @@ def _print_snapshot(engine: OrderflowEngine) -> None:
             f"｜筆數 {snapshot.trade_count_24h:,}"
         )
     print(f"ATR({engine.kline_interval},{engine.atr_period}) : {atr:,.4f}")
+    if engine.context is not None:
+        print(f"多周期上下文: {context_line(engine.context)}")
     print(
         f"觸發門檻   : 單筆 >= ${engine.block_usd:,.0f}"
         f"｜{int(engine.window_ms / 1000)}s 同向累計 >= ${engine.window_usd:,.0f}"

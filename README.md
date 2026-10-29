@@ -42,7 +42,9 @@ flowchart LR
 | `main.py` | CLI 入口（once / loop / news / orderflow / ws-test / cftc / health / ping / serve） |
 | `binance_orderflow.py` | **幣安訂單流引擎**：`@trade` 逐筆監聽、$500k 單筆／$1M 15s 門檻、24h 關鍵位、ATR 止損、重連退避 |
 | `news_pipeline.py` | 即時新聞管線：20 分鐘窗、UTC 驗證、去重、爬取、直譯、格式化 |
-| `news_importance.py` | DeepSeek Flash 新聞重要性評分（0–10，過濾低價值新聞） |
+| `news_importance.py` | DeepSeek Flash 新聞重要性評分（0–10，過濾低價值新聞＋受影響資產） |
+| `market_context.py` | 多周期上下文：ADX(15m/1h/4h/1d)、CVD、OI 增減倉矩陣、資金費率；訊號評級 A/B/C |
+| `equities.py` | 股票基本面＋新聞分析（Finnhub + DeepSeek，PE/PEG 適用性檢查，快取 `data/equities`） |
 | `telegram_dispatcher.py` | 發送層：429 退避、逾時靜默丟棄、最小發送間隔 |
 | `news_sources.py` | Finnhub / Al Jazeera RSS / Marketaux 抓取與能源關鍵字過濾 |
 | `cftc_data.py` | CFTC Socrata 週報 Managed Money 持倉與推播週期（067651） |
@@ -85,6 +87,8 @@ python -m venv .venv
 | `ORDERFLOW_AUTO_CALIBRATE` / `ORDERFLOW_CALIBRATION_FACTOR` | 自動門檻校準（預設開啟；係數 4.5 × 15 秒平均流量） |
 | `ORDERFLOW_MIN_WINDOW_USD` / `ORDERFLOW_MAX_WINDOW_USD` | 校準地板／天花板（預設 $100k / $12M） |
 | `ORDERFLOW_MAX_ALERTS_PER_HOUR` | 全頻道每小時警報上限（預設 20；0 = 不限） |
+| `ORDERFLOW_MIN_GRADE` | 最低訊號評級（`C` 不過濾；`B` 只發 B 以上；`A` 只發 A） |
+| `EQUITY_SYMBOLS` / `EQUITY_CACHE_TTL_SEC` | 股票分析清單（預設 GOOGL,TSLA）與快取秒數（預設 21600） |
 | `ORDERFLOW_BLOCK_USD` | 單筆主動吃單門檻（預設 500000） |
 | `ORDERFLOW_WINDOW_USD` | 滾動窗口同向累計門檻（預設 1000000） |
 | `ORDERFLOW_WINDOW_SEC` | 滾動窗口秒數（預設 15） |
@@ -118,6 +122,8 @@ python -m venv .venv
 .venv\Scripts\python.exe main.py --ping                 # 發送連線測試訊息
 .venv\Scripts\python.exe main.py --orderflow            # 多標的快照（現價/24h/ATR/校準門檻）
 .venv\Scripts\python.exe main.py --orderflow --symbol BTCUSDT  # 單一標的詳細資料
+.venv\Scripts\python.exe main.py --equity GOOGL TSLA    # 股票基本面＋新聞分析（快取）
+.venv\Scripts\python.exe main.py --equity --force       # 分析並推播到 Telegram
 .venv\Scripts\python.exe main.py --orderflow --force    # 加發一則示範警報（驗證 Telegram 格式）
 .venv\Scripts\python.exe main.py --ws-test 60           # 實時監聽 60 秒（印統計，不發送任何訊息）
 .venv\Scripts\python.exe main.py --news                 # 即時新聞掃描（20 分鐘窗 + 直譯）
@@ -171,6 +177,8 @@ python -m venv .venv
 | 動能突破 momentum | 60 秒同向 delta ≥ $2M 且主動佔比 ≥ 70%，價格創 24h 新高／新低（`ORDERFLOW_MOMENTUM_*`） |
 | 巨量吸收 absorption | 60 秒雙向總量 ≥ $3M 但價格推不動（≤0.08%）且貼近 24h 高／低但未突破 → 低點賣壓被接走＝做多、高點買盤被吃掉＝做空（`ORDERFLOW_ABSORPTION_*`） |
 | 量價背離 divergence | 5 分鐘淨主動 delta ≥ $3M 與價格方向相反 → 價漲量賣＝派發（做空）、價跌量買＝吸籌（做多）（`ORDERFLOW_DIVERGENCE_*`） |
+| 多周期評級 | 進場前以 ADX(15m/1h/4h/1d)、CVD、OI 增減倉、資金費率評分：**A ≥78 / B ≥62 / C**；`ORDERFLOW_MIN_GRADE` 可只發 B 以上 |
+| 進場與止盈 | 警報附「進場區間（限價 ±0.02–0.05×ATR）」與 **TP1 = 1.5×ATR、TP2 = 3×ATR**，不追價 |
 | 防洗版 | 三層：每方向冷卻 `ORDERFLOW_COOLDOWN_SEC`（60s）＋全域最小間隔 `ORDERFLOW_MIN_GAP_SEC`（300s，任何方向）＋同方向最小價格推移 `ORDERFLOW_MIN_MOVE_PCT`（0.12%） |
 | 韌性 | WebSocket 斷線 Exponential Backoff 5s→60s；24h/ATR 每 300 秒 REST 背景刷新；REST 失敗指數退避（418/429 硬封鎖 1 小時、絕不逐筆重試）；基準逾時自動停發 |
 

@@ -37,6 +37,7 @@ from fastapi import FastAPI
 from binance_orderflow import AlertBudget, OrderflowEngine, run_orderflow_cli, run_ws_test
 from cftc_data import run_cftc_cycle
 from config import BASE_DIR, Config, REQUIRED_FIELDS, load_config
+from equities import run_equity_cli
 from health import run_health
 from news_pipeline import run_news_cycle
 from pipeline import Tools, run_full_cycle
@@ -179,6 +180,13 @@ def _parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--interval", type=int, default=300, help="--loop 的間隔秒數（預設 300）")
     parser.add_argument("--limit", type=int, default=None, help="每輪最多推播則數（預設讀 MAX_ALERTS_PER_RUN）")
     parser.add_argument("--symbol", default=None, help="只處理單一標的（如 BTCUSDT / CLUSDT）；預設讀 BINANCE_SYMBOLS 全部")
+    parser.add_argument(
+        "--equity",
+        nargs="*",
+        default=None,
+        metavar="SYMBOL",
+        help="股票基本面／新聞分析（預設讀 EQUITY_SYMBOLS；加 --force 同步推播 Telegram）",
+    )
     parser.add_argument("--dry-run", action="store_true", help="只顯示訊息，不實際發送、不更新狀態")
     parser.add_argument("--force", action="store_true", help="忽略門檻與去重（搭配 --orderflow / --cftc）")
     return parser.parse_args(argv)
@@ -251,6 +259,10 @@ def main(argv=None) -> int:
         ok = tools.tg.send_alert(PING_MESSAGE, dry_run=args.dry_run)
         log.info("--ping %s", "完成" if ok else "失敗")
         return 0 if ok else 1
+
+    if args.equity is not None:
+        symbols = [item.upper() for item in args.equity] if args.equity else list(cfg.equity_symbols)
+        return run_equity_cli(cfg, symbols, tools.tg if args.force else None, dry_run=args.dry_run)
 
     if args.news:
         sent = run_news_cycle(cfg, tools.tg, tools.state, dry_run=args.dry_run, limit=args.limit)

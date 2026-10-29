@@ -64,6 +64,12 @@ services:
         value: "4.5"
       - key: ORDERFLOW_MAX_ALERTS_PER_HOUR
         value: "20"
+      - key: ORDERFLOW_MIN_GRADE
+        value: "C"
+      - key: EQUITY_SYMBOLS
+        value: "GOOGL,TSLA"
+      - key: EQUITY_CACHE_TTL_SEC
+        value: "21600"
       - key: LOG_LEVEL
         value: "INFO"
       - key: LOOP_INTERVAL_SECONDS
