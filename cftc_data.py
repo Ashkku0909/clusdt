@@ -228,12 +228,10 @@ def _weekday_label(day: date, with_month: bool = True) -> str:
 
 
 def _fmt_barrels(contracts: int, barrels_per_contract: int) -> str:
-    """口 → 桶（以億/萬桶表示，避免長串數字）。"""
-    barrels = abs(contracts) * barrels_per_contract
+    """口 → 千桶（WTI 1 口 = 1,000 桶，故口數即千桶數，最直觀）。"""
+    thousands = abs(contracts) * barrels_per_contract / 1000.0
     sign = "-" if contracts < 0 else "+"
-    if barrels >= 1_0000_0000:  # 1 億桶
-        return f"{sign}{barrels / 1_0000_0000:.2f} 億桶"
-    return f"{sign}{barrels / 1_0000:,.0f} 萬桶"
+    return f"{sign}{thousands:,.0f} 千桶"
 
 
 MARKET_TITLES = {
@@ -265,8 +263,8 @@ def format_cftc_alert(position: CftcPosition) -> str:
     lines = [
         f"📊 **【CFTC 週度機構持倉 · {MARKET_TITLES.get(position.symbol, position.symbol)}】**",
         "━━━━━━━━━━━━━━━━━━",
-        f"🧭 **管理基金淨持倉**: {position.mm_net:,} 口"
-        f"（≈ {_fmt_barrels(position.mm_net, position.barrels_per_contract)}{notional}）",
+        f"🧭 **管理基金淨持倉**: {_fmt_barrels(position.mm_net, position.barrels_per_contract)}"
+        f"（= {position.mm_net:,} 口{notional}）",
         f"　│ 週變 {_signed(position.mm_net_change)} 口{oi_share}",
         f"📈 **多單**: {position.mm_long:,} 口（週變 {_signed(position.mm_long_change)}）",
         f"📉 **空單**: {position.mm_short:,} 口（週變 {_signed(position.mm_short_change)}）",
