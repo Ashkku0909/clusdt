@@ -38,6 +38,13 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = _env(name)
+    if not value:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Config:
     # Telegram
@@ -49,7 +56,7 @@ class Config:
     # DeepSeek
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
-    deepseek_model: str = "deepseek-chat"
+    deepseek_model: str = "deepseek-flash"
     # Data providers
     fred_api_key: str = ""
     marketaux_api_key: str = ""
@@ -82,6 +89,19 @@ class Config:
     orderflow_min_gap_sec: int = 300
     orderflow_min_move_pct: float = 0.12
     orderflow_snapshot_max_age_sec: int = 1800
+    # 額外訊號（多樣性；可分別關閉）
+    orderflow_enable_momentum: bool = True
+    orderflow_momentum_usd: float = 2_000_000.0
+    orderflow_momentum_share: float = 0.70
+    orderflow_enable_absorption: bool = True
+    orderflow_absorption_usd: float = 3_000_000.0
+    orderflow_absorption_range_pct: float = 0.08
+    orderflow_enable_divergence: bool = True
+    orderflow_divergence_usd: float = 3_000_000.0
+    orderflow_divergence_price_pct: float = 0.10
+    # 新聞重要性過濾（DeepSeek Flash；未設金鑰時自動跳過）
+    news_importance_filter: bool = True
+    news_min_importance: int = 6
     # CFTC 週度籌碼
     cftc_flow_threshold: int = 0
     cftc_check_interval_sec: int = 1800
@@ -109,7 +129,7 @@ def load_config() -> Config:
         data_proxy_url=_env("DATA_PROXY_URL"),
         deepseek_api_key=_env("DEEPSEEK_API_KEY"),
         deepseek_base_url=_env("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/"),
-        deepseek_model=_env("DEEPSEEK_MODEL", "deepseek-v4-pro"),
+        deepseek_model=_env("DEEPSEEK_MODEL", "deepseek-flash"),
         fred_api_key=_env("FRED_API_KEY"),
         marketaux_api_key=_env("MARKETAUX_API_KEY"),
         finnhub_api_key=_env("FINNHUB_API_KEY"),
@@ -138,6 +158,17 @@ def load_config() -> Config:
         orderflow_min_gap_sec=_env_int("ORDERFLOW_MIN_GAP_SEC", 300),
         orderflow_min_move_pct=_env_float("ORDERFLOW_MIN_MOVE_PCT", 0.12),
         orderflow_snapshot_max_age_sec=_env_int("ORDERFLOW_SNAPSHOT_MAX_AGE_SEC", 1800),
+        orderflow_enable_momentum=_env_bool("ORDERFLOW_ENABLE_MOMENTUM", True),
+        orderflow_momentum_usd=_env_float("ORDERFLOW_MOMENTUM_USD", 2_000_000.0),
+        orderflow_momentum_share=_env_float("ORDERFLOW_MOMENTUM_SHARE", 0.70),
+        orderflow_enable_absorption=_env_bool("ORDERFLOW_ENABLE_ABSORPTION", True),
+        orderflow_absorption_usd=_env_float("ORDERFLOW_ABSORPTION_USD", 3_000_000.0),
+        orderflow_absorption_range_pct=_env_float("ORDERFLOW_ABSORPTION_RANGE_PCT", 0.08),
+        orderflow_enable_divergence=_env_bool("ORDERFLOW_ENABLE_DIVERGENCE", True),
+        orderflow_divergence_usd=_env_float("ORDERFLOW_DIVERGENCE_USD", 3_000_000.0),
+        orderflow_divergence_price_pct=_env_float("ORDERFLOW_DIVERGENCE_PRICE_PCT", 0.10),
+        news_importance_filter=_env_bool("NEWS_IMPORTANCE_FILTER", True),
+        news_min_importance=_env_int("NEWS_MIN_IMPORTANCE", 6),
         cftc_flow_threshold=_env_int("CFTC_FLOW_THRESHOLD", 0),
         cftc_check_interval_sec=_env_int("CFTC_CHECK_INTERVAL_SEC", 1800),
     )

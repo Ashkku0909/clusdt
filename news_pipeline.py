@@ -35,6 +35,7 @@ from news_sources import (
     fetch_url_html,
     parse_iso_utc,
 )
+from news_importance import category_label, score_news
 from state import StateStore
 
 log = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ log = logging.getLogger(__name__)
 LOCAL_TZ = ZoneInfo("Asia/Hong_Kong")  # 顯示用本地時區（UTC+8）
 
 SEEN_SECTION = "news_seen"
+FILTERED_SECTION = "news_filtered"
 SEEN_MAX_AGE_HOURS = 48
 MARKETAUX_THROTTLE_FLAG = "news:marketaux:last_fetch"
 PARAGRAPH_MIN_CHARS = 60
@@ -341,24 +343,28 @@ def format_news_alert(
     age_minutes: float,
     title_zh: str,
     paragraphs_zh: list[str],
+    verdict=None,
 ) -> str:
     local_time = published.astimezone(LOCAL_TZ).strftime("%H:%M")
     stamp = f"{int(age_minutes)} 分鐘前 ({local_time} 本地時間)"
     body = "\n\n".join(paragraphs_zh) if paragraphs_zh else "[無法擷取內文]"
-    return "\n".join(
-        [
-            "⚡ **【原油即時快訊】**",
-            "━━━━━━━━━━━━━━━━━━",
-            f"📰 **標題**: {title_zh}",
-            f"🌐 **來源**: {item.source} ｜ 🕒 **發布**: {stamp}",
-            "",
-            "📝 **內文快讀 (中譯)**:",
-            body,
-            "",
-            f"🔗 **原文網址**: {item.url}",
-            "━━━━━━━━━━━━━━━━━━",
-        ]
-    )
+    lines = [
+        "⚡ **【原油即時快訊】**",
+        "━━━━━━━━━━━━━━━━━━",
+        f"📰 **標題**: {title_zh}",
+        f"🌐 **來源**: {item.source} ｜ 🕒 **發布**: {stamp}",
+    ]
+    if verdict is not None:
+        lines.append(f"🎯 **重要性**: {verdict.score}/10（{category_label(verdict.category)}）")
+    lines += [
+        "",
+        "📝 **內文快讀 (中譯)**:",
+        body,
+        "",
+        f"🔗 **原文網址**: {item.url}",
+        "━━━━━━━━━━━━━━━━━━",
+    ]
+    return "\n".join(lines)
 
 
 def run_news_cycle(
@@ -382,32 +388,68 @@ def run_news_cycle(
         return 0
 
     seen = state.get_section(SEEN_SECTION)
+    filtered = state.get_section(FILTERED_SECTION)
     sent = 0
     for entry in fresh:
         if sent >= limit:
             break
         item = entry.item
         keys = _seen_keys(item)
-        if any(key in seen for key in keys):
+        if any(key in seen for key in keys) or any(key in filtered for key in keys):
             continue
 
         log.info("處理新聞：%s（%.1f 分鐘前）", item.title[:70], entry.age_minutes)
+        paragraphs = scrape_article(item.url, cfg, cfg.article_paragraph_limit, preloaded_html=entry.html)
+        if not paragraphs and item.summary.strip():
+            log.info("內文擷取失敗，改用來源摘要（feed summary）")
+            paragraphs = [item.summary.strip()]
+
+        verdict = None
+        if cfg.news_importance_filter and cfg.deepseek_api_key:
+            verdict = score_news(cfg, item.title, " ".join(paragraphs))
+            if verdict is None:
+                log.info("重要性評分不可用（fail-open，照常推播）")
+            elif verdict.score < cfg.news_min_importance:
+                log.info(
+                    "重要性 %d/10 < %d（%s｜%s），過濾：%s",
+                    verdict.score,
+                    cfg.news_min_importance,
+                    category_label(verdict.category),
+                    verdict.reason,
+                    item.title[:60],
+                )
+                if not dry_run:
+                    stamp = datetime.now(timezone.utc).isoformat()
+                    for key in keys:
+                        filtered[key] = stamp
+                continue
+            else:
+                log.info(
+                    "重要性 %d/10（%s）：%s",
+                    verdict.score,
+                    category_label(verdict.category),
+                    verdict.reason,
+                )
+
         title_zh = translate(item.title, cfg)
         if not title_zh:
             log.warning("標題翻譯失敗，丟棄：%s", item.url)
             continue
 
-        paragraphs = scrape_article(item.url, cfg, cfg.article_paragraph_limit, preloaded_html=entry.html)
-        if not paragraphs and item.summary.strip():
-            log.info("內文擷取失敗，改用來源摘要（feed summary）")
-            paragraphs = [item.summary.strip()]
         paragraphs_zh: list[str] = []
         for paragraph in paragraphs:
             translated = translate(paragraph, cfg)
             if translated:
                 paragraphs_zh.append(translated)
 
-        alert = format_news_alert(item, entry.published, entry.age_minutes, title_zh, paragraphs_zh)
+        alert = format_news_alert(
+            item,
+            entry.published,
+            entry.age_minutes,
+            title_zh,
+            paragraphs_zh,
+            verdict=verdict,
+        )
         if dispatcher.send_alert(alert, dry_run=dry_run):
             sent += 1
             if not dry_run:
@@ -416,6 +458,9 @@ def run_news_cycle(
                     seen[key] = stamp
         time.sleep(1.0)
 
-    if not dry_run and seen:
-        state.set_section(SEEN_SECTION, _prune_seen(seen))
+    if not dry_run:
+        if seen:
+            state.set_section(SEEN_SECTION, _prune_seen(seen))
+        if filtered:
+            state.set_section(FILTERED_SECTION, _prune_seen(filtered))
     return sent

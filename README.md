@@ -1,9 +1,9 @@
 # clusdt — 幣安原油訂單流與即時新聞 Telegram 機器人
 
-**100% 確定性管線、零 LLM**：即時市場訊號以 **Binance USDT-M 公共 WebSocket／REST**
-（`CLUSDT` 原油永續）為唯一權威來源——逐筆主動吃單、機構級大單、24h 關鍵位與 ATR 止損；
-即時新聞（嚴格時間窗＋內文爬取＋免費直譯）與 CFTC Managed Money 籌碼為輔助管道。
-不呼叫任何生成式模型、不含情緒判斷或投資建議。
+**市場訊號 100% 規則化**：以 **Binance USDT-M 公共 WebSocket／REST**（`CLUSDT` 原油永續）
+為唯一權威來源——逐筆主動吃單、機構級大單、動能突破、巨量吸收、量價背離、24h 關鍵位與 ATR 止損。
+新聞管道為「嚴格時間窗＋內文爬取＋免費直譯」，並以 **DeepSeek Flash 僅做 0–10 重要性評分**
+過濾無關新聞（不生成敘事、不做情緒判斷、不構成投資建議）；CFTC Managed Money 籌碼為輔助。
 
 ## 運作流程
 
@@ -28,7 +28,7 @@ flowchart LR
     F --> G["data/state.json<br/>news_seen / 冷卻與進度旗標"]
 ```
 
-- **零 LLM**：所有輸出皆為規則判定與直譯文字，無生成式分析、無市場偏見、無投資建議
+- **市場訊號零 LLM**：訂單流輸出全為規則判定；LLM 僅用於新聞重要性評分（DeepSeek Flash），不生成分析文字
 - **唯一權威行情**：已完全移除 `yfinance`（延遲報價／換月價差問題）；市場數據 100% 來自 Binance
 - **嚴格時效**：時間戳無法驗證或超過 `NEWS_MAX_AGE_MINUTES` 一律丟棄
 - **訂單流訊號**：主動吃單方向（`m` 欄位）＋金額門檻＋關鍵位過濾＋ATR 止損，全部為確定性規則
@@ -40,6 +40,7 @@ flowchart LR
 | `main.py` | CLI 入口（once / loop / news / orderflow / ws-test / cftc / health / ping / serve） |
 | `binance_orderflow.py` | **幣安訂單流引擎**：`@trade` 逐筆監聽、$500k 單筆／$1M 15s 門檻、24h 關鍵位、ATR 止損、重連退避 |
 | `news_pipeline.py` | 即時新聞管線：20 分鐘窗、UTC 驗證、去重、爬取、直譯、格式化 |
+| `news_importance.py` | DeepSeek Flash 新聞重要性評分（0–10，過濾低價值新聞） |
 | `telegram_dispatcher.py` | 發送層：429 退避、逾時靜默丟棄、最小發送間隔 |
 | `news_sources.py` | Finnhub / Al Jazeera RSS / Marketaux 抓取與能源關鍵字過濾 |
 | `cftc_data.py` | CFTC Socrata 週報 Managed Money 持倉與推播週期（067651） |
@@ -88,6 +89,12 @@ python -m venv .venv
 | `ORDERFLOW_MIN_GAP_SEC` | 全域最小警報間隔秒數（任何方向，預設 300；調大＝更安靜） |
 | `ORDERFLOW_MIN_MOVE_PCT` | 同方向再次警報所需最小價格推移 %（預設 0.12） |
 | `ORDERFLOW_SNAPSHOT_MAX_AGE_SEC` | 行情基準最大容忍年齡秒數（預設 1800；逾時暫停發訊） |
+| `ORDERFLOW_ENABLE_MOMENTUM` / `ORDERFLOW_ENABLE_ABSORPTION` / `ORDERFLOW_ENABLE_DIVERGENCE` | 額外訊號開關（預設 1＝啟用） |
+| `ORDERFLOW_MOMENTUM_USD` / `ORDERFLOW_MOMENTUM_SHARE` | 動能突破門檻（預設 $2M / 70%） |
+| `ORDERFLOW_ABSORPTION_USD` / `ORDERFLOW_ABSORPTION_RANGE_PCT` | 巨量吸收門檻（預設 $3M / 0.08%） |
+| `ORDERFLOW_DIVERGENCE_USD` / `ORDERFLOW_DIVERGENCE_PRICE_PCT` | 量價背離門檻（預設 $3M / 0.10%） |
+| `NEWS_IMPORTANCE_FILTER` / `NEWS_MIN_IMPORTANCE` | DeepSeek Flash 新聞過濾（預設開啟；分數 < 6 過濾） |
+| `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` | 新聞評分金鑰與模型（預設 `deepseek-flash`；未設金鑰＝不過濾） |
 | `ORDERFLOW_TA_REFRESH_SEC` | 24h 高低／ATR 刷新間隔（預設 300，秒） |
 | `LOOP_INTERVAL_SECONDS` | Render／`--serve` 背景輪詢間隔秒數（預設 300） |
 | `CFTC_FLOW_THRESHOLD` | CFTC 推播門檻（0 = 每次新報告都推播） |
@@ -151,6 +158,9 @@ python -m venv .venv
 | 關鍵位置 | 高＋買＝突破／測試前高阻力位（依進場價相對位置取詞）；高＋賣＝防禦前高阻力位；低＋買＝測試前低支撐位；低＋賣＝跌破／測試前低支撐位 |
 | 性質 | 低點主動買／高點主動賣＝關鍵位強勢防守；其餘＝連續市價吃單 (主動做市主力) |
 | 止損 | 做多＝進場 − 1.5×ATR；做空＝進場 + 1.5×ATR（ATR14＝15m K 線 EMA(TR,14)） |
+| 動能突破 momentum | 60 秒同向 delta ≥ $2M 且主動佔比 ≥ 70%，價格創 24h 新高／新低（`ORDERFLOW_MOMENTUM_*`） |
+| 巨量吸收 absorption | 60 秒雙向總量 ≥ $3M 但價格推不動（≤0.08%）且貼近 24h 高／低但未突破 → 低點賣壓被接走＝做多、高點買盤被吃掉＝做空（`ORDERFLOW_ABSORPTION_*`） |
+| 量價背離 divergence | 5 分鐘淨主動 delta ≥ $3M 與價格方向相反 → 價漲量賣＝派發（做空）、價跌量買＝吸籌（做多）（`ORDERFLOW_DIVERGENCE_*`） |
 | 防洗版 | 三層：每方向冷卻 `ORDERFLOW_COOLDOWN_SEC`（60s）＋全域最小間隔 `ORDERFLOW_MIN_GAP_SEC`（300s，任何方向）＋同方向最小價格推移 `ORDERFLOW_MIN_MOVE_PCT`（0.12%） |
 | 韌性 | WebSocket 斷線 Exponential Backoff 5s→60s；24h/ATR 每 300 秒 REST 背景刷新；REST 失敗指數退避（418/429 硬封鎖 1 小時、絕不逐筆重試）；基準逾時自動停發 |
 
@@ -191,6 +201,9 @@ python -m venv .venv
 - **直譯**：Google 免費端點優先，失敗自動改用 MyMemory（單次 500 字元限制、長文自動分段）；
   回傳錯誤頁（Error 500 等）會被攔截並重試，全數失敗則丟棄該則
 - **去重**：URL 與標題 SHA1 雜湊，持久化於 `state.json` 的 `news_seen`（保留 48 小時）
+- **重要性過濾**：DeepSeek Flash 對每則新聞評 0–10 分（供給／需求／地緣政治／庫存／宏觀），
+  低於 `NEWS_MIN_IMPORTANCE`（預設 6）直接丟棄並記錄於 `state.json` 的 `news_filtered`；
+  未設金鑰或呼叫失敗時 fail-open 照常推播；推播訊息會附「🎯 重要性 X/10（類別）」
 
 ## API 額度備忘
 

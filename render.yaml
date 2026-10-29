@@ -20,6 +20,14 @@ services:
         sync: false
       - key: MARKETAUX_API_KEY
         sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: DEEPSEEK_MODEL
+        value: "deepseek-flash"
+      - key: NEWS_IMPORTANCE_FILTER
+        value: "1"
+      - key: NEWS_MIN_IMPORTANCE
+        value: "6"
       - key: NEWS_MAX_AGE_MINUTES
         value: "20"
       - key: BINANCE_SYMBOL
@@ -42,6 +50,12 @@ services:
         value: "0.12"
       - key: ORDERFLOW_SNAPSHOT_MAX_AGE_SEC
         value: "1800"
+      - key: ORDERFLOW_ENABLE_MOMENTUM
+        value: "1"
+      - key: ORDERFLOW_ENABLE_ABSORPTION
+        value: "1"
+      - key: ORDERFLOW_ENABLE_DIVERGENCE
+        value: "1"
       - key: LOG_LEVEL
         value: "INFO"
       - key: LOOP_INTERVAL_SECONDS

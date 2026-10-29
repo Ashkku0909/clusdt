@@ -24,6 +24,14 @@
       做多止損 = 進場價 − 1.5 × ATR
       做空止損 = 進場價 + 1.5 × ATR
 
+5. 額外訊號（可用環境變數分別開關，增加訊號多樣性）：
+   a. 動能突破 momentum：60 秒同向 delta >= ORDERFLOW_MOMENTUM_USD 且主動佔比 >= 70%，
+      且價格創 24h 新高／新低
+   b. 巨量吸收 absorption：60 秒雙向總量 >= ORDERFLOW_ABSORPTION_USD 但價格推不動
+      （<= 0.08%）且貼著 24h 高／低（未突破）→ 低點賣壓被接走＝做多；高點買盤被吃掉＝做空
+   c. 量價背離 divergence：5 分鐘 delta 與價格方向相反（價漲但淨主動賣 >= $3M＝派發；
+      價跌但淨主動買 >= $3M＝吸籌）
+
 工程設計：
 - WebSocket 斷線自動重連（指數退避 5s → 10s → 20s → 40s → 60s 上限）
 - 24h 高低點與 ATR 每 ORDERFLOW_TA_REFRESH_SEC（預設 300s）以 REST 背景刷新（to_thread）；
@@ -64,6 +72,14 @@ DIRECTION_LABELS = {"long": "做多 🟢", "short": "做空 🔴"}
 # 開頭號誌燈（紅綠燈語意）：做多 = 綠燈 🟢、做空 = 紅燈 🔴
 DIRECTION_LIGHTS = {"long": "🟢", "short": "🔴"}
 
+# 各訊號類型標題（警報第一行）
+HEADER_LABELS = {
+    "sweep": "幣安 CL原油 異動",
+    "momentum": "幣安 CL原油 動能突破",
+    "absorption": "幣安 CL原油 巨量吸收",
+    "divergence": "幣安 CL原油 量價背離",
+}
+
 NATURE_SWEEP = "連續市價吃單 (主動做市主力)"
 NATURE_DEFENSE = "關鍵位強勢防守"
 
@@ -89,7 +105,13 @@ def _level_text(level_kind: str, direction: str, level_price: float, entry_price
         return f"{verb}前低支撐位 ${level_price:,.2f}"
     return LEVEL_TEXT[(level_kind, direction)].format(price=level_price)
 
-TRIGGER_LABELS = {"single_block": "單筆巨量吃單", "window_flow": "15 秒內同向連續吃單"}
+TRIGGER_LABELS = {
+    "single_block": "單筆巨量吃單",
+    "window_flow": "15 秒內同向連續吃單",
+    "momentum": "60 秒動能突破",
+    "absorption": "60 秒巨量吸收",
+    "divergence": "5 分鐘量價背離",
+}
 
 
 # --------------------------------------------------------------------- #
@@ -136,6 +158,65 @@ class OrderflowSignal:
     level_price: float
     level_text: str
     trade_time: datetime
+    kind: str = "sweep"
+
+
+@dataclass(slots=True, frozen=True)
+class SignalCandidate:
+    """偵測器產出的候選訊號（尚未通過冷卻／間隔過濾）。"""
+
+    kind: str
+    direction: str
+    nature: str
+    notional: float
+    qty: float
+    trigger: str
+    level_kind: str
+    level_price: float
+    level_text: str
+
+
+class FlowWindow:
+    """以成交時間剪枝的滾動窗口（名義金額與數量累計）。"""
+
+    __slots__ = ("ms", "events", "buy", "sell", "buy_qty", "sell_qty")
+
+    def __init__(self, ms: int) -> None:
+        self.ms = ms
+        self.events: Deque[TradeEvent] = deque()
+        self.buy = 0.0
+        self.sell = 0.0
+        self.buy_qty = 0.0
+        self.sell_qty = 0.0
+
+    def add(self, event: TradeEvent) -> None:
+        cutoff = event.trade_time_ms - self.ms
+        while self.events and self.events[0].trade_time_ms < cutoff:
+            old = self.events.popleft()
+            if old.taker_buy:
+                self.buy -= old.notional
+                self.buy_qty -= old.qty
+            else:
+                self.sell -= old.notional
+                self.sell_qty -= old.qty
+        self.events.append(event)
+        if event.taker_buy:
+            self.buy += event.notional
+            self.buy_qty += event.qty
+        else:
+            self.sell += event.notional
+            self.sell_qty += event.qty
+
+    @property
+    def delta(self) -> float:
+        return self.buy - self.sell
+
+    @property
+    def total(self) -> float:
+        return self.buy + self.sell
+
+    def first_price(self) -> float | None:
+        return self.events[0].price if self.events else None
 
 
 # --------------------------------------------------------------------- #
@@ -254,7 +335,7 @@ def format_orderflow_alert(signal: OrderflowSignal) -> str:
     """依既定模板輸出警報（純文字，Telegram 端僅做 Markdown→HTML 轉義）。"""
     return "\n".join(
         [
-            f"{DIRECTION_LIGHTS[signal.direction]} 【幣安 CL原油 異動】",
+            f"{DIRECTION_LIGHTS[signal.direction]} 【{HEADER_LABELS.get(signal.kind, HEADER_LABELS['sweep'])}】",
             "━━━━━━━━━━━━━━━━━━",
             f"方向：{DIRECTION_LABELS[signal.direction]}",
             f"進場位：${signal.entry_price:,.2f}",
@@ -294,6 +375,15 @@ class OrderflowEngine:
         self.ta_refresh_sec = float(cfg.orderflow_ta_refresh_sec)
         self.min_gap_sec = float(cfg.orderflow_min_gap_sec)
         self.min_move_pct = float(cfg.orderflow_min_move_pct)
+        self.enable_momentum = bool(cfg.orderflow_enable_momentum)
+        self.momentum_usd = float(cfg.orderflow_momentum_usd)
+        self.momentum_share = float(cfg.orderflow_momentum_share)
+        self.enable_absorption = bool(cfg.orderflow_enable_absorption)
+        self.absorption_usd = float(cfg.orderflow_absorption_usd)
+        self.absorption_range_pct = float(cfg.orderflow_absorption_range_pct)
+        self.enable_divergence = bool(cfg.orderflow_enable_divergence)
+        self.divergence_usd = float(cfg.orderflow_divergence_usd)
+        self.divergence_price_pct = float(cfg.orderflow_divergence_price_pct)
 
         self.dispatcher = dispatcher
         self.dry_run = dry_run
@@ -309,10 +399,10 @@ class OrderflowEngine:
         self._refresh_failures = 0
         self._last_stale_warn = 0.0
 
-        # 15 秒滾動窗口（依 trade_time 剪枝，維持同方向名義金額累計）
-        self._window: Deque[TradeEvent] = deque()
-        self._buy_flow = 0.0
-        self._sell_flow = 0.0
+        # 多尺度滾動窗口（15s 大單偵測 / 60s 動能與吸收 / 300s 背離）
+        self.win15 = FlowWindow(self.window_ms)
+        self.win60 = FlowWindow(60_000)
+        self.win300 = FlowWindow(300_000)
         self._cooldown_until: dict[str, float] = {"long": 0.0, "short": 0.0}
         self._last_alert_at = -1.0e9  # 全域最小間隔用：最後一次「已發送」時間
         self._last_alert_price: dict[str, float] = {}  # 各方向最後一筆已發送價位
@@ -327,6 +417,10 @@ class OrderflowEngine:
             "suppressed_gap": 0,
             "suppressed_move": 0,
             "suppressed_stale": 0,
+            "signal_sweep": 0,
+            "signal_momentum": 0,
+            "signal_absorption": 0,
+            "signal_divergence": 0,
             "max_single_notional": 0.0,
             "max_buy_flow": 0.0,
             "max_sell_flow": 0.0,
@@ -401,36 +495,25 @@ class OrderflowEngine:
         self.stats["trades"] += 1
         self.stats["max_single_notional"] = max(self.stats["max_single_notional"], event.notional)
 
-        # --- 15 秒滾動窗口維護 ---
-        cutoff = event.trade_time_ms - self.window_ms
-        while self._window and self._window[0].trade_time_ms < cutoff:
-            expired = self._window.popleft()
-            if expired.taker_buy:
-                self._buy_flow -= expired.notional
-            else:
-                self._sell_flow -= expired.notional
-        self._window.append(event)
-        # --- 觸發條件（窗口僅在「跨越門檻的那一筆」計一次，避免同一波重複累計）---
-        prev_flow = self._buy_flow if event.taker_buy else self._sell_flow
-        if event.taker_buy:
-            self._buy_flow += event.notional
-        else:
-            self._sell_flow += event.notional
-        window_flow = self._buy_flow if event.taker_buy else self._sell_flow
-        self.stats["max_buy_flow"] = max(self.stats["max_buy_flow"], self._buy_flow)
-        self.stats["max_sell_flow"] = max(self.stats["max_sell_flow"], self._sell_flow)
+        # --- 多尺度滾動窗口維護 ---
+        self.win15.add(event)
+        self.win60.add(event)
+        self.win300.add(event)
+        self.stats["max_buy_flow"] = max(self.stats["max_buy_flow"], self.win15.buy)
+        self.stats["max_sell_flow"] = max(self.stats["max_sell_flow"], self.win15.sell)
 
+        # --- 15 秒大單統計（供 --ws-test 觀察）---
         single_hit = event.notional >= self.block_usd
         if single_hit:
             self.stats["single_blocks"] += 1
-        window_hit = window_flow >= self.window_usd
-        if window_hit and prev_flow < self.window_usd:
+        prev_flow = (self.win15.buy - event.notional) if event.taker_buy else (self.win15.sell - event.notional)
+        window_flow = self.win15.buy if event.taker_buy else self.win15.sell
+        if window_flow >= self.window_usd and prev_flow < self.window_usd:
             self.stats["window_triggers"] += 1
-        if not (single_hit or window_hit):
-            return None
 
         if self.snapshot is None or self.atr is None or self.atr <= 0:
-            log.warning("觸發大單但行情基準尚未就緒，略過本筆")
+            if single_hit or window_flow >= self.window_usd:
+                log.warning("觸發大單但行情基準尚未就緒，略過本筆")
             return None
 
         # --- 基準過期保護（避免用過期關鍵位發訊）---
@@ -446,7 +529,17 @@ class OrderflowEngine:
                 )
             return None
 
-        # --- 24h 高低點位置過濾（僅在關鍵位附近才發訊）---
+        clock = now if now is not None else time.monotonic()
+        for candidate in self._build_candidates(event):
+            signal = self._finalize(candidate, event, clock)
+            if signal is not None:
+                return signal
+        return None
+
+    # ------------------------------------------------------------------ #
+    # 訊號偵測（四類確定性訊號；每筆成交最多發一種）
+    # ------------------------------------------------------------------ #
+    def _build_candidates(self, event: TradeEvent) -> list[SignalCandidate]:
         price = event.price
         high = self.snapshot.high_24h
         low = self.snapshot.low_24h
@@ -454,6 +547,110 @@ class OrderflowEngine:
         dist_low = abs(price - low) / low * 100.0 if low > 0 else float("inf")
         near_high = dist_high <= self.proximity_pct
         near_low = dist_low <= self.proximity_pct
+        candidates: list[SignalCandidate] = []
+
+        # 1) 巨量吸收：60 秒雙向總量巨大但價格推不動，且貼著關鍵位但「未」突破
+        if self.enable_absorption and (near_high or near_low):
+            first_60 = self.win60.first_price()
+            move_60 = abs(price - first_60) / first_60 * 100.0 if first_60 else float("inf")
+            if self.win60.total >= self.absorption_usd and move_60 <= self.absorption_range_pct:
+                buy_dominant = self.win60.buy >= self.win60.sell
+                direction = ""
+                level_kind = ""
+                if near_low and price > low and not buy_dominant:
+                    direction, level_kind = "long", "low"  # 低點賣壓被接走
+                elif near_high and price < high and buy_dominant:
+                    direction, level_kind = "short", "high"  # 高點買盤被吃掉
+                if direction:
+                    level_price = low if level_kind == "low" else high
+                    candidates.append(
+                        SignalCandidate(
+                            kind="absorption",
+                            direction=direction,
+                            nature="關鍵位巨量吸收（掃單被接走）",
+                            notional=self.win60.total,
+                            qty=self.win60.buy_qty + self.win60.sell_qty,
+                            trigger="absorption",
+                            level_kind=level_kind,
+                            level_price=level_price,
+                            level_text=_level_text(level_kind, direction, level_price, price),
+                        )
+                    )
+
+        # 2) 量價背離：5 分鐘累計 delta 與價格方向相反
+        if self.enable_divergence:
+            first_300 = self.win300.first_price()
+            delta_300 = self.win300.delta
+            if first_300 and abs(delta_300) >= self.divergence_usd:
+                move_300 = (price - first_300) / first_300 * 100.0
+                if delta_300 <= -self.divergence_usd and move_300 >= self.divergence_price_pct:
+                    candidates.append(
+                        SignalCandidate(
+                            kind="divergence",
+                            direction="short",
+                            nature="量價背離（價漲量賣、疑似派發）",
+                            notional=abs(delta_300),
+                            qty=self.win300.sell_qty,
+                            trigger="divergence",
+                            level_kind="high",
+                            level_price=high,
+                            level_text=f"24h 高位區 ${high:,.2f}（距 {dist_high:.2f}%）",
+                        )
+                    )
+                elif delta_300 >= self.divergence_usd and move_300 <= -self.divergence_price_pct:
+                    candidates.append(
+                        SignalCandidate(
+                            kind="divergence",
+                            direction="long",
+                            nature="量價背離（價跌量買、疑似吸籌）",
+                            notional=abs(delta_300),
+                            qty=self.win300.buy_qty,
+                            trigger="divergence",
+                            level_kind="low",
+                            level_price=low,
+                            level_text=f"24h 低位區 ${low:,.2f}（距 {dist_low:.2f}%）",
+                        )
+                    )
+
+        # 3) 動能突破：60 秒主動方向高度集中且價格創 24h 新高／新低
+        if self.enable_momentum and self.win60.total > 0:
+            delta_60 = self.win60.delta
+            buy_share = self.win60.buy / self.win60.total
+            if delta_60 >= self.momentum_usd and buy_share >= self.momentum_share and price >= high:
+                candidates.append(
+                    SignalCandidate(
+                        kind="momentum",
+                        direction="long",
+                        nature="動能突破（主動買壓制）",
+                        notional=self.win60.buy,
+                        qty=self.win60.buy_qty,
+                        trigger="momentum",
+                        level_kind="high",
+                        level_price=high,
+                        level_text=f"突破 24h 高點 ${high:,.2f}（新高效應）",
+                    )
+                )
+            elif -delta_60 >= self.momentum_usd and (1.0 - buy_share) >= self.momentum_share and price <= low:
+                candidates.append(
+                    SignalCandidate(
+                        kind="momentum",
+                        direction="short",
+                        nature="動能突破（主動賣壓制）",
+                        notional=self.win60.sell,
+                        qty=self.win60.sell_qty,
+                        trigger="momentum",
+                        level_kind="low",
+                        level_price=low,
+                        level_text=f"跌破 24h 低點 ${low:,.2f}（新低效應）",
+                    )
+                )
+
+        # 4) 原有：15 秒單筆／同向累計吃單 + 關鍵位過濾
+        single_hit = event.notional >= self.block_usd
+        window_flow = self.win15.buy if event.taker_buy else self.win15.sell
+        window_hit = window_flow >= self.window_usd
+        if not (single_hit or window_hit):
+            return candidates
         if not (near_high or near_low):
             self.stats["suppressed_sr"] += 1
             log.debug(
@@ -462,16 +659,45 @@ class OrderflowEngine:
                 dist_high,
                 dist_low,
             )
-            return None
+            return candidates
         if near_high and near_low:
             level_kind = "high" if dist_high <= dist_low else "low"
         else:
             level_kind = "high" if near_high else "low"
         level_price = high if level_kind == "high" else low
+        direction = "long" if event.taker_buy else "short"
+        nature = (
+            NATURE_DEFENSE
+            if (direction == "long" and level_kind == "low") or (direction == "short" and level_kind == "high")
+            else NATURE_SWEEP
+        )
+        if window_hit:
+            notional_out = window_flow
+            qty_out = sum(t.qty for t in self.win15.events if t.taker_buy == event.taker_buy)
+        else:
+            notional_out = event.notional
+            qty_out = event.qty
+        candidates.append(
+            SignalCandidate(
+                kind="sweep",
+                direction=direction,
+                nature=nature,
+                notional=notional_out,
+                qty=qty_out,
+                trigger="window_flow" if window_hit else "single_block",
+                level_kind=level_kind,
+                level_price=level_price,
+                level_text=_level_text(level_kind, direction, level_price, price),
+            )
+        )
+        return candidates
+
+    def _finalize(self, candidate: SignalCandidate, event: TradeEvent, clock: float) -> OrderflowSignal | None:
+        """共用過濾（冷卻／全域間隔／同價推移）與訊號組裝。"""
+        direction = candidate.direction
+        price = event.price
 
         # --- 冷卻（每方向獨立）---
-        direction = "long" if event.taker_buy else "short"
-        clock = now if now is not None else time.monotonic()
         if clock < self._cooldown_until[direction]:
             self.stats["suppressed_cooldown"] += 1
             log.debug("%s 方向冷卻中（剩餘 %.0f 秒），壓制", direction, self._cooldown_until[direction] - clock)
@@ -498,20 +724,6 @@ class OrderflowEngine:
             )
             return None
 
-        # --- 組裝訊號 ---
-        trigger = "window_flow" if window_hit else "single_block"
-        if window_hit:
-            notional_out = window_flow
-            qty_out = sum(t.qty for t in self._window if t.taker_buy == event.taker_buy)
-        else:
-            notional_out = event.notional
-            qty_out = event.qty
-
-        nature = (
-            NATURE_DEFENSE
-            if (direction == "long" and level_kind == "low") or (direction == "short" and level_kind == "high")
-            else NATURE_SWEEP
-        )
         stop_loss = (
             price - self.atr_mult * self.atr if direction == "long" else price + self.atr_mult * self.atr
         )
@@ -522,19 +734,21 @@ class OrderflowEngine:
             stop_loss=stop_loss,
             atr=self.atr,
             atr_mult=self.atr_mult,
-            nature=nature,
-            notional=notional_out,
-            qty=qty_out,
-            trigger=trigger,
-            level_kind=level_kind,
-            level_price=level_price,
-            level_text=_level_text(level_kind, direction, level_price, price),
+            nature=candidate.nature,
+            notional=candidate.notional,
+            qty=candidate.qty,
+            trigger=candidate.trigger,
+            level_kind=candidate.level_kind,
+            level_price=candidate.level_price,
+            level_text=candidate.level_text,
             trade_time=datetime.fromtimestamp(event.trade_time_ms / 1000.0, tz=timezone.utc),
+            kind=candidate.kind,
         )
         self._cooldown_until[direction] = clock + self.cooldown_sec
         self._last_alert_at = clock
         self._last_alert_price[direction] = price
         self.stats["signals"] += 1
+        self.stats[f"signal_{candidate.kind}"] = self.stats.get(f"signal_{candidate.kind}", 0) + 1
         return signal
 
     # ------------------------------------------------------------------ #
@@ -616,7 +830,7 @@ class OrderflowEngine:
     # ------------------------------------------------------------------ #
     def stats_line(self) -> str:
         return (
-            "trades=%d｜單筆巨量=%d｜窗口觸發=%d｜訊號=%d"
+            "trades=%d｜單筆巨量=%d｜窗口觸發=%d｜訊號=%d（sweep=%d/mom=%d/abs=%d/div=%d）"
             "｜S/R 壓制=%d｜冷卻壓制=%d｜間隔壓制=%d｜同價壓制=%d｜過期壓制=%d"
             "｜單筆最大=$%.0f｜買峰=$%.0f｜賣峰=$%.0f"
             % (
@@ -624,6 +838,10 @@ class OrderflowEngine:
                 self.stats["single_blocks"],
                 self.stats["window_triggers"],
                 self.stats["signals"],
+                self.stats["signal_sweep"],
+                self.stats["signal_momentum"],
+                self.stats["signal_absorption"],
+                self.stats["signal_divergence"],
                 self.stats["suppressed_sr"],
                 self.stats["suppressed_cooldown"],
                 self.stats["suppressed_gap"],
