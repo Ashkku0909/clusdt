@@ -34,7 +34,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from binance_orderflow import AlertBudget, OrderflowEngine, run_orderflow_cli, run_ws_test
+from binance_orderflow import AlertBudget, OrderflowEngine, RestGate, run_orderflow_cli, run_ws_test
 from binance_news import run_binance_news_cycle
 from cftc_data import run_cftc_cycle
 from config import BASE_DIR, Config, REQUIRED_FIELDS, load_config
@@ -106,17 +106,22 @@ async def _start_orderflow_engine() -> None:
         return
     dispatcher = TelegramDispatcher(cfg.telegram_bot_token, cfg.telegram_chat_id, cfg.telegram_proxy_url)
     budget = AlertBudget(cfg.orderflow_max_alerts_per_hour)
+    gate = RestGate()
+    symbols = list(cfg.binance_symbols)
+    context_spread = min(60.0, float(cfg.orderflow_ta_refresh_sec)) / max(1, len(symbols))
     tasks: list[asyncio.Task] = []
     started: list[str] = []
-    for code in cfg.binance_symbols:
-        engine = OrderflowEngine(cfg, dispatcher, symbol=code, budget=budget)
+    for index, code in enumerate(symbols):
+        engine = OrderflowEngine(cfg, dispatcher, symbol=code, budget=budget, gate=gate)
+        # 上下文錯開抓取：把 23 個標的分散在 60 秒內，避免啟動瞬間爆量
+        engine._next_context_at = time.monotonic() + index * context_spread
         try:
             await asyncio.to_thread(engine.resolve)
         except Exception as exc:  # noqa: BLE001 - 限流時沿用預設代碼，稍後自動重試
             log.warning("%s 合約代碼解析失敗（%s），沿用預設，稍後自動重試", code, exc)
         tasks.append(asyncio.create_task(engine.run_forever(), name=f"orderflow-{engine.symbol}"))
         started.append(engine.symbol)
-        await asyncio.sleep(0.25)  # 錯峰啟動，避免 23 個標的同時打 REST
+        await asyncio.sleep(0.5)  # 錯峰啟動，避免 23 個標的同時打 REST
     _engine_tasks = tasks
     log.info(
         "訂單流引擎已啟動 %d 個標的：%s（全頻道上限 %d 則/小時）",

@@ -54,6 +54,8 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
+import re
 import threading
 import time
 from collections import deque
@@ -426,6 +428,46 @@ def format_orderflow_alert(signal: OrderflowSignal) -> str:
 # --------------------------------------------------------------------- #
 # 訂單流引擎
 # --------------------------------------------------------------------- #
+class RestGate:
+    """跨標的共享 REST 熔斷：任一標的遇到 418/429，全體暫停到封鎖結束。
+
+    沒有這層時，23 個引擎會各自每 60 秒重試，把 Binance 的封鎖時間不斷延長。
+    """
+
+    def __init__(self, default_ban_sec: float = 600.0) -> None:
+        self._lock = threading.Lock()
+        self._blocked_until = 0.0
+        self.default_ban_sec = default_ban_sec
+
+    def blocked(self) -> bool:
+        with self._lock:
+            return time.monotonic() < self._blocked_until
+
+    def remaining(self) -> float:
+        with self._lock:
+            return max(0.0, self._blocked_until - time.monotonic())
+
+    def block_for(self, seconds: float) -> None:
+        with self._lock:
+            self._blocked_until = max(self._blocked_until, time.monotonic() + max(60.0, float(seconds)))
+
+
+def parse_ban_seconds(exc: Exception, default: float = 600.0) -> float | None:
+    """從 418/429 錯誤訊息解析「banned until <epoch ms>」，回傳需要暫停的秒數。"""
+    message = str(exc)
+    lowered = message.lower()
+    if "418" not in message and "429" not in message and "banned" not in lowered and "too many requests" not in lowered:
+        return None
+    match = re.search(r"banned until (\d{10,})", message)
+    if match:
+        try:
+            until = int(match.group(1)) / 1000.0
+            return max(60.0, min(6 * 3600.0, until - time.time() + 30.0))
+        except (TypeError, ValueError):
+            pass
+    return default
+
+
 class AlertBudget:
     """全域警報預算（所有標的共用；防止多標的同時刷頻）。"""
 
@@ -456,6 +498,7 @@ class OrderflowEngine:
         symbol: str | None = None,
         dry_run: bool = False,
         budget: "AlertBudget | None" = None,
+        gate: "RestGate | None" = None,
     ) -> None:
         self.symbol = (symbol or getattr(cfg, "binance_symbol", "") or CANDIDATE_SYMBOLS[0]).upper()
         self.block_usd = float(cfg.orderflow_block_usd)
@@ -484,6 +527,7 @@ class OrderflowEngine:
         self.min_window_usd = float(cfg.orderflow_min_window_usd)
         self.max_window_usd = float(cfg.orderflow_max_window_usd)
         self.budget = budget
+        self.gate = gate or RestGate()
         self.context: MarketContext | None = None
         self.min_grade = str(cfg.orderflow_min_grade).upper()
 
@@ -527,6 +571,7 @@ class OrderflowEngine:
             "signal_divergence": 0,
             "suppressed_budget": 0,
             "suppressed_grade": 0,
+            "suppressed_bad_tick": 0,
             "max_single_notional": 0.0,
             "max_buy_flow": 0.0,
             "max_sell_flow": 0.0,
@@ -578,7 +623,7 @@ class OrderflowEngine:
         - 非阻塞鎖：同時間只允許一個刷新在執行
         """
         now = time.monotonic()
-        if now < self._refresh_fail_until:
+        if self.gate.blocked() or now < self._refresh_fail_until:
             return  # 418/429 封鎖期間：一般與強制刷新皆暂停
         if not force and now < self._next_refresh_at:
             return
@@ -590,11 +635,11 @@ class OrderflowEngine:
                 atr = fetch_atr(self.session, self.symbol, self.kline_interval, self.atr_period)
             except Exception as exc:  # noqa: BLE001 - 保留舊基準繼續運作
                 self._refresh_failures += 1
-                message = str(exc)
-                banned = any(token in message for token in ("418", "429", "banned"))
-                if banned:
-                    self._refresh_fail_until = time.monotonic() + 3600.0
-                    delay = 3600.0
+                ban = parse_ban_seconds(exc, self.gate.default_ban_sec)
+                if ban is not None:
+                    self.gate.block_for(ban)
+                    self._refresh_fail_until = time.monotonic() + ban
+                    delay = ban
                 else:
                     delay = min(self.ta_refresh_sec * (2 ** min(self._refresh_failures, 4)), 3600.0)
                 self._next_refresh_at = time.monotonic() + delay
@@ -608,7 +653,7 @@ class OrderflowEngine:
             self.snapshot = snapshot
             self.atr = atr
             self.apply_calibration(snapshot)
-            self._refresh_context(force=True)
+            self._refresh_context()
             self._refresh_failures = 0
             self._baseline_warned = False
             self._next_refresh_at = time.monotonic() + self.ta_refresh_sec
@@ -626,7 +671,9 @@ class OrderflowEngine:
             self._refresh_lock.release()
 
     def _refresh_context(self, force: bool = False) -> None:
-        """抓取多周期上下文；失敗 60 秒後重試，不影響行情基準。"""
+        """抓取多周期上下文；遇 418/429 交由共享熔斷器，不再自行重試。"""
+        if self.gate.blocked():
+            return
         now = time.monotonic()
         if not force and now < self._next_context_at:
             return
@@ -634,13 +681,22 @@ class OrderflowEngine:
             self.context = fetch_market_context(self.session, self.symbol)
             self._next_context_at = time.monotonic() + self.ta_refresh_sec
         except Exception as exc:  # noqa: BLE001 - 上下文失敗不阻塞交易
-            self._next_context_at = time.monotonic() + 60.0
-            log.warning("%s 市場上下文取得失敗（60 秒後重試）：%s", self.symbol, exc)
+            ban = parse_ban_seconds(exc, self.gate.default_ban_sec)
+            if ban is not None:
+                self.gate.block_for(ban)
+                self._next_context_at = time.monotonic() + ban
+                log.warning("%s 上下文失敗：全體 REST 熔斷 %.0f 秒（不再重試）", self.symbol, ban)
+            else:
+                self._next_context_at = time.monotonic() + 60.0
+                log.warning("%s 市場上下文取得失敗（60 秒後重試）：%s", self.symbol, exc)
 
     # ------------------------------------------------------------------ #
     # 純邏輯：逐筆成交 → 訊號判斷（可離線單元測試）
     # ------------------------------------------------------------------ #
     def process_trade(self, event: TradeEvent, now: float | None = None) -> OrderflowSignal | None:
+        if event.price <= 0.0 or event.qty <= 0.0 or event.notional <= 0.0:
+            self.stats["suppressed_bad_tick"] += 1
+            return None
         self.stats["trades"] += 1
         self.stats["max_single_notional"] = max(self.stats["max_single_notional"], event.notional)
 
@@ -848,6 +904,17 @@ class OrderflowEngine:
         direction = candidate.direction
         price = event.price
 
+        # --- 價格健全性（防止 0 價／離群價組出負數止盈）---
+        if price <= 0.0 or not math.isfinite(price):
+            self.stats["suppressed_bad_tick"] += 1
+            log.debug("成交價異常（%r），丟棄", price)
+            return None
+        reference = self.snapshot.last_price if self.snapshot is not None else 0.0
+        if reference > 0 and abs(price - reference) / reference > 0.25:
+            self.stats["suppressed_bad_tick"] += 1
+            log.warning("%s 成交價 $%.4f 偏離基準現價 $%.4f 超過 25%%，疑似異常行情，丟棄", self.symbol, price, reference)
+            return None
+
         # --- 冷卻（每方向獨立）---
         if clock < self._cooldown_until[direction]:
             self.stats["suppressed_cooldown"] += 1
@@ -969,7 +1036,11 @@ class OrderflowEngine:
                     return
                 if time.monotonic() >= self._next_refresh_at:
                     await asyncio.to_thread(self.refresh_market_data, False)
-                if self.context is None and time.monotonic() >= self._next_context_at:
+                if (
+                    self.context is None
+                    and not self.gate.blocked()
+                    and time.monotonic() >= self._next_context_at
+                ):
                     await asyncio.to_thread(self._refresh_context, True)
                 try:
                     message = json.loads(raw)
@@ -987,6 +1058,14 @@ class OrderflowEngine:
                     await self._dispatch(signal)
 
     async def _dispatch(self, signal: OrderflowSignal) -> None:
+        if signal.entry_price <= 0 or signal.stop_loss <= 0:
+            log.warning(
+                "%s 訊號價格異常（進場 $%.4f／止損 $%.4f），已攔截不發送",
+                self.symbol,
+                signal.entry_price,
+                signal.stop_loss,
+            )
+            return
         text = format_orderflow_alert(signal)
         log.info(
             "⚡ 訂單流訊號 %s %s：$%.0f（%s，%.2f 手）｜進場 $%.2f → 止損 $%.2f",
@@ -1012,7 +1091,7 @@ class OrderflowEngine:
     def stats_line(self) -> str:
         return (
             "trades=%d｜單筆巨量=%d｜窗口觸發=%d｜訊號=%d（sweep=%d/mom=%d/abs=%d/div=%d）"
-            "｜S/R 壓制=%d｜冷卻壓制=%d｜間隔壓制=%d｜同價壓制=%d｜過期壓制=%d｜預算壓制=%d｜評級壓制=%d"
+            "｜S/R 壓制=%d｜冷卻壓制=%d｜間隔壓制=%d｜同價壓制=%d｜過期壓制=%d｜預算壓制=%d｜評級壓制=%d｜異常價=%d"
             "｜單筆最大=$%.0f｜買峰=$%.0f｜賣峰=$%.0f"
             % (
                 self.stats["trades"],
@@ -1030,6 +1109,7 @@ class OrderflowEngine:
                 self.stats["suppressed_stale"],
                 self.stats["suppressed_budget"],
                 self.stats["suppressed_grade"],
+                self.stats["suppressed_bad_tick"],
                 self.stats["max_single_notional"],
                 self.stats["max_buy_flow"],
                 self.stats["max_sell_flow"],
@@ -1041,11 +1121,19 @@ def parse_trade(data: dict) -> TradeEvent:
     """Binance ``@trade`` 事件 → TradeEvent。
 
     ``m`` = 買方是否為做市商；``m=False`` 代表買方為 taker（主動買）。
+
+    Binance 會偶爾推送 ``p="0" q="0" X="NA" st=1`` 的「無成交」佔位事件
+    （實測 BNBUSDT 25 秒內出現 3 次）。這類事件必須丟棄，否則進場價、
+    止損與止盈都會被算成 0。
     """
+    price = float(data["p"])
+    qty = float(data["q"])
+    if price <= 0.0 or qty <= 0.0:
+        raise ValueError(f"無效成交事件（p={price}, q={qty}, st={data.get('st')}）")
     return TradeEvent(
         trade_time_ms=int(data["T"]),
-        price=float(data["p"]),
-        qty=float(data["q"]),
+        price=price,
+        qty=qty,
         taker_buy=(data.get("m") is False),
     )
 
@@ -1125,12 +1213,14 @@ def run_orderflow_cli(
 ) -> int:
     """``--orderflow``：多標的快照；``--symbol`` 指定單一標的詳細資料；``--force`` 發示範警報。"""
     symbols = [symbol.upper()] if symbol else list(cfg.binance_symbols)
+    gate = RestGate()
     engines: list[OrderflowEngine] = []
     for code in symbols:
-        engine = OrderflowEngine(cfg, dispatcher, symbol=code, dry_run=dry_run)
+        engine = OrderflowEngine(cfg, dispatcher, symbol=code, dry_run=dry_run, gate=gate)
         try:
             engine.resolve()
             engine.refresh_market_data(force=True)
+            engine._refresh_context(force=True)
         except Exception as exc:  # noqa: BLE001 - 單一標的失敗不影響其他
             print(f"❌ {code} 初始化失敗：{exc}")
             continue
@@ -1192,8 +1282,9 @@ def run_ws_test(cfg, seconds: float = 30.0, symbol: str | None = None) -> int:
 
     async def runner() -> list[OrderflowEngine]:
         engines: list[OrderflowEngine] = []
+        gate = RestGate()
         for code in symbols:
-            engine = OrderflowEngine(cfg, dispatcher=None, symbol=code, dry_run=True)
+            engine = OrderflowEngine(cfg, dispatcher=None, symbol=code, dry_run=True, gate=gate)
             try:
                 await asyncio.to_thread(engine.resolve)
             except Exception as exc:  # noqa: BLE001 - 限流時沿用預設代碼
