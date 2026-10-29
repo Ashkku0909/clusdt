@@ -212,6 +212,13 @@ def format_cftc_alert(position: CftcPosition) -> str:
 
 def run_cftc_cycle(cfg, dispatcher, state, dry_run: bool = False, force: bool = False) -> int:
     """檢查 CFTC 週報（僅 NYMEX WTI，067651）；新報告才推播。"""
+    # 先看節流再打 API：舊版先抓資料再寫時戳，導致 last_check 永遠等於「現在」而一律略過
+    flags = state.get_flags()
+    last_check = _flag_float(flags.get(CFTC_CHECK_FLAG))
+    if not force and last_check and (time.time() - last_check) < cfg.cftc_check_interval_sec:
+        log.info("CFTC：距上次檢查 %.0f 秒 < %d 秒，略過", time.time() - last_check, cfg.cftc_check_interval_sec)
+        return 0
+
     try:
         positions = get_positions(cfg)
     except Exception as exc:  # noqa: BLE001
@@ -224,12 +231,6 @@ def run_cftc_cycle(cfg, dispatcher, state, dry_run: bool = False, force: bool = 
 
     if not dry_run:
         state.update_flags({CFTC_CHECK_FLAG: str(time.time())})
-
-    flags = state.get_flags()
-    last_check = _flag_float(flags.get(CFTC_CHECK_FLAG))
-    if not force and last_check and (time.time() - last_check) < cfg.cftc_check_interval_sec:
-        log.info("CFTC：距上次檢查 %.0f 秒 < %d 秒，略過", time.time() - last_check, cfg.cftc_check_interval_sec)
-        return 0
 
     is_new = str(flags.get(CFTC_FLAG, "")) != position.report_date
     change = position.mm_net_change

@@ -62,6 +62,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Deque, Iterable
 
 import requests
@@ -85,6 +86,21 @@ WS_COMBINED = "wss://fstream.binance.com/stream?streams={streams}"
 # 依序探測：CLUSDT 為 Binance 現行「原油 (CL)」永續合約代碼
 CANDIDATE_SYMBOLS: tuple[str, ...] = ("CLUSDT", "OILUSDT")
 FALLBACK_BASE_ASSETS: tuple[str, ...] = ("CL", "OIL", "WTI", "BRENT", "CRUDE")
+
+# ATR 磁碟快取：重啟或 REST 被封鎖期間仍可用（WS K 線會持續增量更新）
+BASELINE_DIR = Path(__file__).resolve().parent / "data" / "baseline"
+BASELINE_MAX_AGE_SEC = 12 * 3600.0
+
+INTERVAL_MS = {
+    "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000,
+    "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000, "6h": 21_600_000,
+    "12h": 43_200_000, "1d": 86_400_000,
+}
+
+
+def interval_ms(interval: str) -> int:
+    """K 線週期字串（15m/1h/4h/1d）→ 毫秒。"""
+    return INTERVAL_MS.get(str(interval).strip(), 900_000)
 
 DIRECTION_LABELS = {"long": "做多 🟢", "short": "做空 🔴"}
 
@@ -555,6 +571,10 @@ class OrderflowEngine:
         self._last_stale_warn = 0.0
         self._baseline_warned = False
         self._next_context_at = 0.0
+        # WS K 線增量維護 ATR（REST 被封鎖也不中斷）
+        self._bar_ms = interval_ms(self.kline_interval)
+        self._prev_close: float | None = None
+        self._prev_bar_ts = 0
 
         # 多尺度滾動窗口（15s 大單偵測 / 60s 動能與吸收 / 300s 背離）
         self.win15 = FlowWindow(self.window_ms)
@@ -589,6 +609,102 @@ class OrderflowEngine:
     # ------------------------------------------------------------------ #
     # 市場資料（阻塞；請以 to_thread 呼叫）
     # ------------------------------------------------------------------ #
+    def _baseline_path(self) -> Path:
+        return BASELINE_DIR / f"{self.symbol}.json"
+
+    def _save_baseline(self) -> None:
+        """把 ATR 與最後一根收盤 K 線寫盤，供重啟／REST 封鎖期間使用。"""
+        if not self.atr or self.atr <= 0:
+            return
+        payload = {
+            "symbol": self.symbol,
+            "kline_interval": self.kline_interval,
+            "atr": self.atr,
+            "prev_close": self._prev_close,
+            "prev_bar_ts": self._prev_bar_ts,
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            BASELINE_DIR.mkdir(parents=True, exist_ok=True)
+            self._baseline_path().write_text(json.dumps(payload), encoding="utf-8")
+        except OSError as exc:  # noqa: BLE001 - 快取失敗不影響主流程
+            log.debug("%s ATR 快取寫入失敗：%s", self.symbol, exc)
+
+    def _load_baseline(self) -> None:
+        """讀回磁碟 ATR；尚未取得 ATR 時才载入（REST 恢復後會覆蓋）。"""
+        if self.atr and self.atr > 0:
+            return
+        try:
+            payload = json.loads(self._baseline_path().read_text(encoding="utf-8"))
+            saved = datetime.fromisoformat(payload["saved_at"])
+            atr = float(payload["atr"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return
+        if saved.tzinfo is None:
+            saved = saved.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - saved).total_seconds()
+        if atr <= 0 or age > BASELINE_MAX_AGE_SEC:
+            return
+        self.atr = atr
+        prev_close = payload.get("prev_close")
+        self._prev_close = float(prev_close) if prev_close else None
+        self._prev_bar_ts = int(payload.get("prev_bar_ts") or 0)
+        log.info("%s 沿用磁碟 ATR %.4f（%.0f 分鐘前）", self.symbol, atr, age / 60.0)
+
+    def _remember_closed_bar(self, klines: list[list]) -> None:
+        """記住最後一根「已收盤」K 線，作為 WS ATR 增量的起點。"""
+        if len(klines) < 2:
+            return
+        row = klines[-2]  # 最後一根為進行中，倒數第二根才是已收盤
+        with contextlib.suppress(TypeError, ValueError, IndexError):
+            self._prev_bar_ts = int(row[0])
+            self._prev_close = float(row[4])
+
+    def _apply_ws_ticker(self, data: dict) -> None:
+        """24hrTicker 推播（每秒）：直接用 WS 維護 24h 高低點，不依賴 REST。"""
+        try:
+            last = float(data["c"])
+            high = float(data["h"])
+            low = float(data["l"])
+            quote_volume = float(data.get("q") or 0.0)
+            trades = int(data.get("n") or 0)
+        except (KeyError, TypeError, ValueError):
+            return
+        if last <= 0 or high <= 0 or low <= 0 or high < low:
+            return
+        self.snapshot = MarketSnapshot(
+            symbol=self.symbol,
+            last_price=last,
+            high_24h=high,
+            low_24h=low,
+            quote_volume_24h=quote_volume,
+            trade_count_24h=trades,
+        )
+        self.apply_calibration(self.snapshot)
+
+    def _apply_ws_kline(self, data: dict) -> None:
+        """K 線收盤時用 Wilder 遞推更新 ATR（不需 REST）。"""
+        bar = data.get("k") or {}
+        if not bar.get("x"):
+            return
+        try:
+            open_ts = int(bar["t"])
+            high = float(bar["h"])
+            low = float(bar["l"])
+            close = float(bar["c"])
+        except (KeyError, TypeError, ValueError):
+            return
+        if open_ts == self._prev_bar_ts or high <= 0 or low <= 0 or close <= 0:
+            return
+        prev_close = self._prev_close
+        gap_bars = 0 if self._prev_bar_ts == 0 else (open_ts - self._prev_bar_ts) // max(self._bar_ms, 1)
+        if self.atr and self.atr > 0 and prev_close and 0 < gap_bars <= 1:
+            true_range = max(high - low, abs(high - prev_close), abs(low - prev_close))
+            self.atr += (true_range - self.atr) / self.atr_period
+            self._save_baseline()
+        self._prev_bar_ts = open_ts
+        self._prev_close = close
+
     def resolve(self) -> str:
         """確定並記住實際可用的合約代碼。"""
         self.symbol = resolve_symbol(self.session, self.symbol)
@@ -633,7 +749,8 @@ class OrderflowEngine:
         """
         now = time.monotonic()
         if self.gate.blocked() or now < self._refresh_fail_until:
-            # 418/429 封鎖期間：一般與強制刷新皆暫停，僅沿用既有／快取資料
+            # 418/429 封鎖期間：一般與強制刷新皆暫停；WS ticker/kline 仍持續供給基準
+            self._load_baseline()
             self._restore_cached_context()
             return
         if not force and now < self._next_refresh_at:
@@ -643,7 +760,10 @@ class OrderflowEngine:
         try:
             try:
                 snapshot = fetch_snapshot(self.session, self.symbol)
-                atr = fetch_atr(self.session, self.symbol, self.kline_interval, self.atr_period)
+                rows = fetch_klines(
+                    self.session, self.symbol, self.kline_interval, self.atr_period + 48
+                )
+                atr = compute_atr(rows, self.atr_period)
             except Exception as exc:  # noqa: BLE001 - 保留舊基準繼續運作
                 self._refresh_failures += 1
                 ban = parse_ban_seconds(exc, self.gate.default_ban_sec)
@@ -651,18 +771,27 @@ class OrderflowEngine:
                     self.gate.block_for(ban)
                     self._refresh_fail_until = time.monotonic() + ban
                     delay = ban
+                    until_local = datetime.fromtimestamp(time.time() + ban).strftime("%H:%M")
+                    log.warning(
+                        "行情基準刷新失敗（REST 封鎖至約 %s；WebSocket 行情照常，不影響訊號）：%s",
+                        until_local,
+                        exc,
+                    )
                 else:
                     delay = min(self.ta_refresh_sec * (2 ** min(self._refresh_failures, 4)), 3600.0)
+                    log.warning(
+                        "行情基準刷新失敗（沿用舊值；%.0f 秒後再試，連續失敗 %d 次）：%s",
+                        delay,
+                        self._refresh_failures,
+                        exc,
+                    )
                 self._next_refresh_at = time.monotonic() + delay
-                log.warning(
-                    "行情基準刷新失敗（沿用舊值；%.0f 秒後再試，連續失敗 %d 次）：%s",
-                    delay,
-                    self._refresh_failures,
-                    exc,
-                )
+                self._load_baseline()
                 return
             self.snapshot = snapshot
             self.atr = atr
+            self._remember_closed_bar(rows)
+            self._save_baseline()
             self.apply_calibration(snapshot)
             self._refresh_context()
             self._refresh_failures = 0
@@ -1043,9 +1172,12 @@ class OrderflowEngine:
                 backoff = min(backoff * 2, 60.0)
 
     async def _consume_stream(self) -> None:
-        stream = f"{self.symbol.lower()}@trade"
+        base = self.symbol.lower()
+        # trade（成交）＋ ticker（24h 高低/成交額）＋ kline（ATR 增量）：後兩者讓 REST 完全非必需
+        stream = f"{base}@trade/{base}@ticker/{base}@kline_{self.kline_interval}"
         uri = WS_COMBINED.format(streams=stream)
-        # 先載入行情基準再連線：避免開盤瞬間的成交因基準未就緒被丟棄
+        # 先載入磁碟 ATR（若有）再載行情基準：REST 被封鎖時仍可發訊號
+        self._load_baseline()
         await asyncio.to_thread(self.refresh_market_data, True)
         async with websockets.connect(
             uri,
@@ -1073,7 +1205,14 @@ class OrderflowEngine:
                 except ValueError:
                     continue
                 data = message.get("data", message)
-                if data.get("e") != "trade":
+                event_type = data.get("e")
+                if event_type == "24hrTicker":
+                    self._apply_ws_ticker(data)
+                    continue
+                if event_type == "kline":
+                    self._apply_ws_kline(data)
+                    continue
+                if event_type != "trade":
                     continue
                 try:
                     event = parse_trade(data)
