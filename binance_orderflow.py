@@ -411,7 +411,7 @@ def format_orderflow_alert(signal: OrderflowSignal) -> str:
         f"進場區間：${_fmt_price(signal.entry_low)} – ${_fmt_price(signal.entry_high)}（限價）",
         f"止損位：${_fmt_price(signal.stop_loss)} (ATR {signal.atr_mult:g}x)",
         f"止盈：TP1 ${_fmt_price(signal.tp1)}｜TP2 ${_fmt_price(signal.tp2)}",
-        f"評級：{signal.grade}（{signal.score} 分）",
+        f"評級：{signal.grade}（{'資料不足' if signal.grade == '—' else f'{signal.score} 分'}）",
         f"性質：{signal.nature}",
         f"大單金額：${signal.notional:,.0f}",
         f"成交量：{signal.qty:,.2f} 手",
@@ -501,6 +501,7 @@ class OrderflowEngine:
         self._refresh_failures = 0
         self._last_stale_warn = 0.0
         self._baseline_warned = False
+        self._next_context_at = 0.0
 
         # 多尺度滾動窗口（15s 大單偵測 / 60s 動能與吸收 / 300s 背離）
         self.win15 = FlowWindow(self.window_ms)
@@ -607,10 +608,7 @@ class OrderflowEngine:
             self.snapshot = snapshot
             self.atr = atr
             self.apply_calibration(snapshot)
-            try:
-                self.context = fetch_market_context(self.session, self.symbol)
-            except Exception as exc:  # noqa: BLE001 - 上下文失敗不影響行情基準
-                log.warning("%s 市場上下文取得失敗（沿用舊值）：%s", self.symbol, exc)
+            self._refresh_context(force=True)
             self._refresh_failures = 0
             self._baseline_warned = False
             self._next_refresh_at = time.monotonic() + self.ta_refresh_sec
@@ -626,6 +624,18 @@ class OrderflowEngine:
             )
         finally:
             self._refresh_lock.release()
+
+    def _refresh_context(self, force: bool = False) -> None:
+        """抓取多周期上下文；失敗 60 秒後重試，不影響行情基準。"""
+        now = time.monotonic()
+        if not force and now < self._next_context_at:
+            return
+        try:
+            self.context = fetch_market_context(self.session, self.symbol)
+            self._next_context_at = time.monotonic() + self.ta_refresh_sec
+        except Exception as exc:  # noqa: BLE001 - 上下文失敗不阻塞交易
+            self._next_context_at = time.monotonic() + 60.0
+            log.warning("%s 市場上下文取得失敗（60 秒後重試）：%s", self.symbol, exc)
 
     # ------------------------------------------------------------------ #
     # 純邏輯：逐筆成交 → 訊號判斷（可離線單元測試）
@@ -959,6 +969,8 @@ class OrderflowEngine:
                     return
                 if time.monotonic() >= self._next_refresh_at:
                     await asyncio.to_thread(self.refresh_market_data, False)
+                if self.context is None and time.monotonic() >= self._next_context_at:
+                    await asyncio.to_thread(self._refresh_context, True)
                 try:
                     message = json.loads(raw)
                 except ValueError:

@@ -227,13 +227,13 @@ def fetch_market_context(session: requests.Session, symbol: str, bars: int = 120
 # --------------------------------------------------------------------- #
 # 訊號評分（A/B/C；確定性）
 # --------------------------------------------------------------------- #
-GRADE_RANK = {"C": 0, "B": 1, "A": 2}
+GRADE_RANK = {"—": 2, "C": 0, "B": 1, "A": 2}
 
 
 def grade_signal(context: MarketContext | None, direction: str, kind: str) -> tuple[int, str, list[str]]:
-    """回傳 (分數 0-100, 等級 A/B/C, 理由列表)。"""
+    """回傳 (分數 0-100, 等級 A/B/—, 理由列表)。"""
     if context is None:
-        return 50, "B", []
+        return 0, "—", []
     score = 55
     reasons: list[str] = []
     frame15 = context.frame("15m")
@@ -302,7 +302,7 @@ def grade_signal(context: MarketContext | None, direction: str, kind: str) -> tu
 def context_line(context: MarketContext | None, reasons: list[str] | None = None) -> str:
     """警報用的一行上下文摘要。"""
     if context is None:
-        return "市場上下文：暫無"
+        return "市場上下文：資料不足（ADX/CVD/OI 未就緒）"
     frame15 = context.frame("15m")
     frame1h = context.frame("1h")
     parts = []
