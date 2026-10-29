@@ -110,6 +110,7 @@ class Config:
     news_max_age_minutes: int = 20
     article_paragraph_limit: int = 3
     translate_target: str = "zh-TW"
+    mymemory_email: str = ""
     marketaux_min_interval_sec: int = 1800
     # Binance 即時訂單流（唯一權威市場資料源；零 LLM）
     binance_symbol: str = "CLUSDT"
@@ -209,6 +210,7 @@ def load_config() -> Config:
         news_max_age_minutes=_env_int("NEWS_MAX_AGE_MINUTES", 20),
         article_paragraph_limit=_env_int("ARTICLE_PARAGRAPH_LIMIT", 3),
         translate_target=_env("TRANSLATE_TARGET", "zh-TW"),
+        mymemory_email=_env("MYMEMORY_EMAIL", "").strip(),
         marketaux_min_interval_sec=_env_int("MARKETAUX_MIN_INTERVAL_SEC", 1800),
         binance_symbol=_env("BINANCE_SYMBOL", "CLUSDT").upper(),
         binance_symbols=_env_list("BINANCE_SYMBOLS", DEFAULT_SYMBOLS),

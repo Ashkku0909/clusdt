@@ -36,6 +36,7 @@ from news_sources import (
     parse_iso_utc,
 )
 from news_importance import assets_label, category_label, score_news
+from llm_translate import translate_lines
 from state import StateStore
 
 log = logging.getLogger(__name__)
@@ -44,6 +45,8 @@ LOCAL_TZ = ZoneInfo("Asia/Hong_Kong")  # 顯示用本地時區（UTC+8）
 
 SEEN_SECTION = "news_seen"
 FILTERED_SECTION = "news_filtered"
+TRANSLATIONS_SECTION = "news_translations"
+TRANSLATIONS_MAX = 800
 SEEN_MAX_AGE_HOURS = 48
 MARKETAUX_THROTTLE_FLAG = "news:marketaux:last_fetch"
 PARAGRAPH_MIN_CHARS = 60
@@ -53,6 +56,7 @@ TRANSLATE_MAX_CHARS = 1500  # 單次翻譯長度上限（免費端點保護）
 GARBAGE_MARKERS = (
     "error 500", "server error", "that’s an error", "that's an error",
     "please try again later", "<!doctype", "<html", "404 not found", "502 bad gateway",
+    "mymemory warning", "you used all available free translations", "too many requests",
 )
 
 
@@ -276,6 +280,8 @@ def _translate_google(payload: str, cfg: Config) -> str | None:
 
 
 MYMEMORY_CHUNK_LIMIT = 480  # MyMemory 單次上限 500 字元
+MYMEMORY_COOLDOWN_SEC = 3600  # 配額耗盡後停止嘗試，避免每次推播都撞牆
+_mymemory_down_until = 0.0
 
 
 def _split_for_mymemory(text: str) -> list[str]:
@@ -302,13 +308,30 @@ def _split_for_mymemory(text: str) -> list[str]:
 
 
 def _translate_mymemory(payload: str, cfg: Config) -> str | None:
-    """備援：MyMemory 免費 API（單次 500 字元上限，長文自動分段）。"""
+    """最後手段：MyMemory 免費 API（匿名 5,000 字/日；填 MYMEMORY_EMAIL 提升至 50,000）。"""
+    global _mymemory_down_until
+    if time.time() < _mymemory_down_until:
+        return None
     parts: list[str] = []
+    email = (getattr(cfg, "mymemory_email", "") or "").strip() or None
     for chunk in _split_for_mymemory(payload):
         try:
-            result = MyMemoryTranslator(source="en-US", target=cfg.translate_target).translate(chunk)
+            translator = MyMemoryTranslator(
+                source="en-US", target=cfg.translate_target, email=email
+            )
+            result = translator.translate(chunk)
         except Exception as exc:  # noqa: BLE001
-            log.warning("MyMemory 翻譯失敗：%s", exc)
+            message = str(exc)
+            if "too many requests" in message.lower() or "quota" in message.lower():
+                _mymemory_down_until = time.time() + MYMEMORY_COOLDOWN_SEC
+                log.warning(
+                    "MyMemory 免費額度耗盡（匿名 5,000 字/日、填 MYMEMORY_EMAIL 可到 50,000），"
+                    "冷卻 %d 秒：%s",
+                    MYMEMORY_COOLDOWN_SEC,
+                    message[:120],
+                )
+            else:
+                log.warning("MyMemory 翻譯失敗：%s", message[:120])
             break
         result = (result or "").strip()
         if not result or _looks_like_garbage(result):
@@ -318,20 +341,91 @@ def _translate_mymemory(payload: str, cfg: Config) -> str | None:
 
 
 def translate(text: str, cfg: Config) -> str | None:
-    """直譯（Google → MyMemory 引擎鏈）；全數失敗時回傳 None。"""
-    text = (text or "").strip()
-    if not text:
-        return None
-    payload = text[:TRANSLATE_MAX_CHARS]
-    for _ in range(2):
+    """單句直譯（供 Binance 公告等單行呼叫）。"""
+    return translate_batch([text], cfg)[0]
+
+
+def _tr_key(text: str) -> str:
+    return hashlib.sha1(text.strip().lower().encode("utf-8")).hexdigest()[:16]
+
+
+_translation_cache: dict[str, str] = {}
+
+
+def load_translation_cache(state: StateStore) -> None:
+    """載入歷史譯文，避免同一句話重複打第三方端點。"""
+    _translation_cache.clear()
+    section = state.get_section(TRANSLATIONS_SECTION)
+    if isinstance(section, dict):
+        _translation_cache.update({str(k): str(v) for k, v in section.items() if v})
+
+
+def save_translation_cache(state: StateStore, dry_run: bool = False) -> None:
+    if dry_run or not _translation_cache:
+        return
+    # 只保留最近 TRANSLATIONS_MAX 筆（dict 依插入順序）
+    items = list(_translation_cache.items())[-TRANSLATIONS_MAX:]
+    state.set_section(TRANSLATIONS_SECTION, dict(items))
+
+
+def _remember(payload: str, zh: str) -> str:
+    _translation_cache[_tr_key(payload)] = zh
+    return zh
+
+
+def translate_batch(texts: list[str], cfg: Config) -> list[str | None]:
+    """批量直譯：快取 → Google 免費 → DeepSeek → MyMemory。
+
+    - 快取命中直接回傳，不再產外部請求
+    - DeepSeek 整批一次呼叫（比逐句打免費端點穩定得多，且可讀性更好）
+    - MyMemory 僅作最後手段；它以 IP 計每日額度，共用雲端 IP 很容易耗盡
+    """
+    results: list[str | None] = [None] * len(texts)
+    pending: list[tuple[int, str]] = []
+    for index, raw in enumerate(texts):
+        text = (raw or "").strip()
+        if not text:
+            results[index] = ""
+            continue
+        payload = text[:TRANSLATE_MAX_CHARS]
+        cached = _translation_cache.get(_tr_key(payload))
+        if cached and not _looks_like_garbage(cached):
+            results[index] = cached
+        else:
+            pending.append((index, payload))
+
+    # 1) Google 免費端點（品質優先；失敗會自動冷卻 600 秒）
+    still: list[tuple[int, str]] = []
+    for index, payload in pending:
         result = _translate_google(payload, cfg)
         if result:
-            return result
+            results[index] = _remember(payload, result)
+        else:
+            still.append((index, payload))
+
+    # 2) DeepSeek（一次翻完整批，最可靠的備援）
+    if still:
+        translated = translate_lines([payload for _, payload in still], cfg)
+        if translated:
+            remaining: list[tuple[int, str]] = []
+            for (index, payload), zh in zip(still, translated):
+                zh = (zh or "").strip()
+                if zh and not _looks_like_garbage(zh):
+                    results[index] = _remember(payload, zh)
+                else:
+                    remaining.append((index, payload))
+            still = remaining
+            if still:
+                log.warning("DeepSeek 翻譯有 %d 句未完成，改用 MyMemory", len(still))
+        else:
+            log.warning("DeepSeek 翻譯不可用（%d 句），改用 MyMemory", len(still))
+
+    # 3) MyMemory（最後手段）
+    for index, payload in still:
         result = _translate_mymemory(payload, cfg)
         if result:
-            return result
-        time.sleep(1.0)
-    return None
+            results[index] = _remember(payload, result)
+    return results
 
 
 # --------------------------------------------------------------------- #
@@ -392,6 +486,7 @@ def run_news_cycle(
 
     seen = state.get_section(SEEN_SECTION)
     filtered = state.get_section(FILTERED_SECTION)
+    load_translation_cache(state)
     sent = 0
     for entry in fresh:
         if sent >= limit:
@@ -434,16 +529,12 @@ def run_news_cycle(
                     verdict.reason,
                 )
 
-        title_zh = translate(item.title, cfg)
+        translated = translate_batch([item.title, *paragraphs], cfg)
+        title_zh = translated[0]
         if not title_zh:
-            log.warning("標題翻譯失敗，丟棄：%s", item.url)
+            log.warning("標題翻譯失敗（三層引擎皆不可用），丟棄：%s", item.url)
             continue
-
-        paragraphs_zh: list[str] = []
-        for paragraph in paragraphs:
-            translated = translate(paragraph, cfg)
-            if translated:
-                paragraphs_zh.append(translated)
+        paragraphs_zh = [zh for zh in translated[1:] if zh]
 
         alert = format_news_alert(
             item,
@@ -466,4 +557,5 @@ def run_news_cycle(
             state.set_section(SEEN_SECTION, _prune_seen(seen))
         if filtered:
             state.set_section(FILTERED_SECTION, _prune_seen(filtered))
+        save_translation_cache(state)
     return sent
