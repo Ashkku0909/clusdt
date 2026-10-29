@@ -90,20 +90,12 @@ LATEST_PRICES: dict[str, float] = {}
 CANDIDATE_SYMBOLS: tuple[str, ...] = ("CLUSDT", "OILUSDT")
 FALLBACK_BASE_ASSETS: tuple[str, ...] = ("CL", "OIL", "WTI", "BRENT", "CRUDE")
 
-# ATR 磁碟快取：重啟或 REST 被封鎖期間仍可用（WS K 線會持續增量更新）
+# REST 基準在 418 封鎖時難以取得：ATR 與 24h 高低點一併落盤，重啟/封鎖仍可發訊號
 BASELINE_DIR = Path(__file__).resolve().parent / "data" / "baseline"
 BASELINE_MAX_AGE_SEC = 12 * 3600.0
-
-INTERVAL_MS = {
-    "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000,
-    "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000, "6h": 21_600_000,
-    "12h": 43_200_000, "1d": 86_400_000,
-}
-
-
-def interval_ms(interval: str) -> int:
-    """K 線週期字串（15m/1h/4h/1d）→ 毫秒。"""
-    return INTERVAL_MS.get(str(interval).strip(), 900_000)
+SNAPSHOT_CACHE_MAX_AGE_SEC = 6 * 3600.0
+# 部署到新機器（/tmp 重設）時，若沒有任何快取就用倉庫內的種子檔（由 --dump-baseline 產生）
+BASELINE_SEED_PATH = Path(__file__).resolve().parent / "baseline_seed.json"
 
 DIRECTION_LABELS = {"long": "做多 🟢", "short": "做空 🔴"}
 
@@ -578,10 +570,6 @@ class OrderflowEngine:
         self._connected = False
         self._last_msg_at = 0.0
         self._connected_at = 0.0
-        # WS K 線增量維護 ATR（REST 被封鎖也不中斷）
-        self._bar_ms = interval_ms(self.kline_interval)
-        self._prev_close: float | None = None
-        self._prev_bar_ts = 0
 
         # 多尺度滾動窗口（15s 大單偵測 / 60s 動能與吸收 / 300s 背離）
         self.win15 = FlowWindow(self.window_ms)
@@ -620,98 +608,85 @@ class OrderflowEngine:
         return BASELINE_DIR / f"{self.symbol}.json"
 
     def _save_baseline(self) -> None:
-        """把 ATR 與最後一根收盤 K 線寫盤，供重啟／REST 封鎖期間使用。"""
+        """把 ATR 與 24h 高低點寫盤，供重啟／REST 封鎖期間使用。"""
         if not self.atr or self.atr <= 0:
             return
-        payload = {
+        payload: dict = {
             "symbol": self.symbol,
             "kline_interval": self.kline_interval,
             "atr": self.atr,
-            "prev_close": self._prev_close,
-            "prev_bar_ts": self._prev_bar_ts,
             "saved_at": datetime.now(timezone.utc).isoformat(),
         }
+        if self.snapshot is not None:
+            payload["snapshot"] = {
+                "last_price": self.snapshot.last_price,
+                "high_24h": self.snapshot.high_24h,
+                "low_24h": self.snapshot.low_24h,
+                "quote_volume_24h": self.snapshot.quote_volume_24h,
+                "trade_count_24h": self.snapshot.trade_count_24h,
+                "fetched_at": self.snapshot.fetched_at.isoformat(),
+            }
         try:
             BASELINE_DIR.mkdir(parents=True, exist_ok=True)
             self._baseline_path().write_text(json.dumps(payload), encoding="utf-8")
         except OSError as exc:  # noqa: BLE001 - 快取失敗不影響主流程
-            log.debug("%s ATR 快取寫入失敗：%s", self.symbol, exc)
+            log.debug("%s 基準快取寫入失敗：%s", self.symbol, exc)
 
     def _load_baseline(self) -> None:
-        """讀回磁碟 ATR；尚未取得 ATR 時才载入（REST 恢復後會覆蓋）。"""
-        if self.atr and self.atr > 0:
+        """讀回磁碟 ATR 與 24h 高低點（先找本機快取，再找倉庫種子檔）。"""
+        now = datetime.now(timezone.utc)
+        payload: dict | None = None
+        for path, is_seed in ((self._baseline_path(), False), (BASELINE_SEED_PATH, True)):
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            candidate = raw.get(self.symbol) if is_seed else raw
+            if isinstance(candidate, dict):
+                payload = candidate
+                break
+        if payload is None:
             return
-        try:
-            payload = json.loads(self._baseline_path().read_text(encoding="utf-8"))
-            saved = datetime.fromisoformat(payload["saved_at"])
-            atr = float(payload["atr"])
-        except (OSError, ValueError, KeyError, TypeError):
-            return
-        if saved.tzinfo is None:
-            saved = saved.replace(tzinfo=timezone.utc)
-        age = (datetime.now(timezone.utc) - saved).total_seconds()
-        if atr <= 0 or age > BASELINE_MAX_AGE_SEC:
-            return
-        self.atr = atr
-        prev_close = payload.get("prev_close")
-        self._prev_close = float(prev_close) if prev_close else None
-        self._prev_bar_ts = int(payload.get("prev_bar_ts") or 0)
-        log.info("%s 沿用磁碟 ATR %.4f（%.0f 分鐘前）", self.symbol, atr, age / 60.0)
-
-    def _remember_closed_bar(self, klines: list[list]) -> None:
-        """記住最後一根「已收盤」K 線，作為 WS ATR 增量的起點。"""
-        if len(klines) < 2:
-            return
-        row = klines[-2]  # 最後一根為進行中，倒數第二根才是已收盤
-        with contextlib.suppress(TypeError, ValueError, IndexError):
-            self._prev_bar_ts = int(row[0])
-            self._prev_close = float(row[4])
-
-    def _apply_ws_ticker(self, data: dict) -> None:
-        """24hrTicker 推播（每秒）：直接用 WS 維護 24h 高低點，不依賴 REST。"""
-        try:
-            last = float(data["c"])
-            high = float(data["h"])
-            low = float(data["l"])
-            quote_volume = float(data.get("q") or 0.0)
-            trades = int(data.get("n") or 0)
-        except (KeyError, TypeError, ValueError):
-            return
-        if last <= 0 or high <= 0 or low <= 0 or high < low:
-            return
-        self.snapshot = MarketSnapshot(
-            symbol=self.symbol,
-            last_price=last,
-            high_24h=high,
-            low_24h=low,
-            quote_volume_24h=quote_volume,
-            trade_count_24h=trades,
-        )
-        LATEST_PRICES[self.symbol] = last
-        self.apply_calibration(self.snapshot)
-
-    def _apply_ws_kline(self, data: dict) -> None:
-        """K 線收盤時用 Wilder 遞推更新 ATR（不需 REST）。"""
-        bar = data.get("k") or {}
-        if not bar.get("x"):
-            return
-        try:
-            open_ts = int(bar["t"])
-            high = float(bar["h"])
-            low = float(bar["l"])
-            close = float(bar["c"])
-        except (KeyError, TypeError, ValueError):
-            return
-        if open_ts == self._prev_bar_ts or high <= 0 or low <= 0 or close <= 0:
-            return
-        prev_close = self._prev_close
-        gap_bars = 0 if self._prev_bar_ts == 0 else (open_ts - self._prev_bar_ts) // max(self._bar_ms, 1)
-        if self.atr and self.atr > 0 and prev_close and 0 < gap_bars <= 1:
-            true_range = max(high - low, abs(high - prev_close), abs(low - prev_close))
-            self.atr += (true_range - self.atr) / self.atr_period
-            self._save_baseline()
-        self._prev_bar_ts = open_ts
-        self._prev_close = close
+        if not self.atr or self.atr <= 0:
+            try:
+                saved = datetime.fromisoformat(payload["saved_at"])
+                atr = float(payload["atr"])
+            except (KeyError, TypeError, ValueError):
+                saved, atr = None, 0.0
+            if saved is not None:
+                if saved.tzinfo is None:
+                    saved = saved.replace(tzinfo=timezone.utc)
+                age = (now - saved).total_seconds()
+                if atr > 0 and age <= BASELINE_MAX_AGE_SEC:
+                    self.atr = atr
+                    log.info("%s 沿用磁碟 ATR %.4f（%.0f 分鐘前）", self.symbol, atr, age / 60.0)
+        if self.snapshot is None and isinstance(payload.get("snapshot"), dict):
+            raw = payload["snapshot"]
+            try:
+                fetched = datetime.fromisoformat(raw["fetched_at"])
+                if fetched.tzinfo is None:
+                    fetched = fetched.replace(tzinfo=timezone.utc)
+                age = (now - fetched).total_seconds()
+                if age <= SNAPSHOT_CACHE_MAX_AGE_SEC:
+                    self.snapshot = MarketSnapshot(
+                        symbol=self.symbol,
+                        last_price=float(raw["last_price"]),
+                        high_24h=float(raw["high_24h"]),
+                        low_24h=float(raw["low_24h"]),
+                        quote_volume_24h=float(raw.get("quote_volume_24h") or 0.0),
+                        trade_count_24h=int(raw.get("trade_count_24h") or 0),
+                        fetched_at=fetched,
+                    )
+                    self.apply_calibration(self.snapshot)
+                    log.info(
+                        "%s 沿用磁碟 24h 高低點 %.4f–%.4f（%.0f 分鐘前）",
+                        self.symbol,
+                        self.snapshot.low_24h,
+                        self.snapshot.high_24h,
+                        age / 60.0,
+                    )
+            except (KeyError, TypeError, ValueError):
+                pass
 
     def resolve(self) -> str:
         """確定並記住實際可用的合約代碼。"""
@@ -757,9 +732,10 @@ class OrderflowEngine:
         """
         now = time.monotonic()
         if self.gate.blocked() or now < self._refresh_fail_until:
-            # 418/429 封鎖期間：一般與強制刷新皆暫停；WS ticker/kline 仍持續供給基準
+            # 418/429 封鎖期間：不發任何請求；只補上磁碟基準，並把下次嘗試排到封鎖結束
             self._load_baseline()
             self._restore_cached_context()
+            self._next_refresh_at = now + max(60.0, self.gate.remaining())
             return
         if not force and now < self._next_refresh_at:
             return
@@ -781,7 +757,7 @@ class OrderflowEngine:
                     delay = ban
                     until_local = datetime.fromtimestamp(time.time() + ban).strftime("%H:%M")
                     log.warning(
-                        "行情基準刷新失敗（REST 封鎖至約 %s；WebSocket 行情照常，不影響訊號）：%s",
+                        "REST 被限流至約 %s；改用磁碟快取的 24h 高低點與 ATR 繼續運作（訊號不中斷）：%s",
                         until_local,
                         exc,
                     )
@@ -799,7 +775,6 @@ class OrderflowEngine:
             self.snapshot = snapshot
             self.atr = atr
             LATEST_PRICES[self.symbol] = snapshot.last_price
-            self._remember_closed_bar(rows)
             self._save_baseline()
             self.apply_calibration(snapshot)
             self._refresh_context()
@@ -861,6 +836,7 @@ class OrderflowEngine:
         if event.price <= 0.0 or event.qty <= 0.0 or event.notional <= 0.0:
             self.stats["suppressed_bad_tick"] += 1
             return None
+        LATEST_PRICES[self.symbol] = event.price
         self.stats["trades"] += 1
         self.stats["max_single_notional"] = max(self.stats["max_single_notional"], event.notional)
 
@@ -887,8 +863,15 @@ class OrderflowEngine:
                 log.info("%s 行情基準載入中，暫停評估訊號（完成後自動恢復）", self.symbol)
             return None
 
-        # --- 基準過期保護（避免用過期關鍵位發訊）---
+        # --- 基準過期保證（沿用磁碟快取時會在 30 分鐘後提示）---
         age = (datetime.now(timezone.utc) - self.snapshot.fetched_at).total_seconds()
+        if age > 1800 and time.time() - self._last_stale_warn >= 300:
+            self._last_stale_warn = time.time()
+            log.warning(
+                "%s 行情基準已 %.0f 分鐘未更新（REST 限流中，沿用磁碟快取）",
+                self.symbol,
+                age / 60.0,
+            )
         if age > self.snapshot_max_age_sec:
             self.stats["suppressed_stale"] += 1
             if time.time() - self._last_stale_warn >= 300:
@@ -1182,10 +1165,10 @@ class OrderflowEngine:
 
     async def _consume_stream(self) -> None:
         base = self.symbol.lower()
-        # trade（成交）＋ ticker（24h 高低/成交額）＋ kline（ATR 增量）：後兩者讓 REST 完全非必需
-        stream = f"{base}@trade/{base}@ticker/{base}@kline_{self.kline_interval}"
-        uri = WS_COMBINED.format(streams=stream)
-        # 先載入磁碟 ATR（若有）再載行情基準：REST 被封鎖時仍可發訊號
+        # 注意：本環境的 @ticker / @kline / @miniTicker / @markPrice 全部靜默（BTC 對照亦同），
+        # 只有 @trade 與 @bookTicker 有資料 → 24h 高低點與 ATR 必須靠 REST + 磁碟快取
+        uri = WS_COMBINED.format(streams=f"{base}@trade")
+        # 先載入磁碟基準（ATR／24h 高低）再載行情：REST 被封鎖時仍可發訊號
         self._load_baseline()
         await asyncio.to_thread(self.refresh_market_data, True)
         async with websockets.connect(
@@ -1218,14 +1201,7 @@ class OrderflowEngine:
                     except ValueError:
                         continue
                     data = message.get("data", message)
-                    event_type = data.get("e")
-                    if event_type == "24hrTicker":
-                        self._apply_ws_ticker(data)
-                        continue
-                    if event_type == "kline":
-                        self._apply_ws_kline(data)
-                        continue
-                    if event_type != "trade":
+                    if data.get("e") != "trade":
                         continue
                     try:
                         event = parse_trade(data)
@@ -1345,6 +1321,46 @@ def parse_trade(data: dict) -> TradeEvent:
 # --------------------------------------------------------------------- #
 # CLI 輔助（--orderflow / --ws-test）
 # --------------------------------------------------------------------- #
+def dump_baseline_seed(cfg) -> int:
+    """抓一輪 24h ticker 與 ATR 寫入 baseline_seed.json。
+
+    用途：Render 每次部署都會清空磁碟；若此時剛好被 418 限流，
+    引擎會在完全沒有基準的情況下停擺。種子檔隨倉庫部署，可継續運作。
+    """
+    session = requests.Session()
+    stamp = datetime.now(timezone.utc).isoformat()
+    out: dict[str, dict] = {}
+    for code in cfg.binance_symbols:
+        try:
+            snapshot = fetch_snapshot(session, code)
+            rows = fetch_klines(
+                session, code, cfg.orderflow_kline_interval, cfg.orderflow_atr_period + 48
+            )
+            atr = compute_atr(rows, cfg.orderflow_atr_period)
+        except Exception as exc:  # noqa: BLE001 - 單一標的失敗不影響其他
+            print(f"✗ {code}: {exc}")
+            continue
+        out[code] = {
+            "symbol": code,
+            "kline_interval": cfg.orderflow_kline_interval,
+            "atr": atr,
+            "saved_at": stamp,
+            "snapshot": {
+                "last_price": snapshot.last_price,
+                "high_24h": snapshot.high_24h,
+                "low_24h": snapshot.low_24h,
+                "quote_volume_24h": snapshot.quote_volume_24h,
+                "trade_count_24h": snapshot.trade_count_24h,
+                "fetched_at": snapshot.fetched_at.isoformat(),
+            },
+        }
+        print(f"✓ {code:<10} ${snapshot.last_price:,.4f}｜24h {snapshot.low_24h:,.4f}–{snapshot.high_24h:,.4f}｜ATR {atr:,.4f}")
+        time.sleep(0.2)
+    BASELINE_SEED_PATH.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"\n已寫入 {len(out)}/{len(cfg.binance_symbols)} 個標的 → {BASELINE_SEED_PATH}")
+    return len(out)
+
+
 def _print_snapshot(engine: OrderflowEngine) -> None:
     snapshot = engine.snapshot
     atr = engine.atr or 0.0

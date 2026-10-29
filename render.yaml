@@ -57,7 +57,7 @@ services:
       - key: ORDERFLOW_MIN_MOVE_PCT
         value: "0.12"
       - key: ORDERFLOW_SNAPSHOT_MAX_AGE_SEC
-        value: "1800"
+        value: "10800"
       - key: ORDERFLOW_ENABLE_MOMENTUM
         value: "1"
       - key: ORDERFLOW_ENABLE_ABSORPTION

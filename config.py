@@ -126,7 +126,7 @@ class Config:
     orderflow_ta_refresh_sec: int = 300
     orderflow_min_gap_sec: int = 300
     orderflow_min_move_pct: float = 0.12
-    orderflow_snapshot_max_age_sec: int = 1800
+    orderflow_snapshot_max_age_sec: int = 10800
     # 額外訊號（多樣性；可分別關閉）
     orderflow_enable_momentum: bool = True
     orderflow_momentum_usd: float = 2_000_000.0
@@ -225,7 +225,7 @@ def load_config() -> Config:
         orderflow_ta_refresh_sec=_env_int("ORDERFLOW_TA_REFRESH_SEC", 300),
         orderflow_min_gap_sec=_env_int("ORDERFLOW_MIN_GAP_SEC", 300),
         orderflow_min_move_pct=_env_float("ORDERFLOW_MIN_MOVE_PCT", 0.12),
-        orderflow_snapshot_max_age_sec=_env_int("ORDERFLOW_SNAPSHOT_MAX_AGE_SEC", 1800),
+            orderflow_snapshot_max_age_sec=_env_int("ORDERFLOW_SNAPSHOT_MAX_AGE_SEC", 10800),
         orderflow_enable_momentum=_env_bool("ORDERFLOW_ENABLE_MOMENTUM", True),
         orderflow_momentum_usd=_env_float("ORDERFLOW_MOMENTUM_USD", 2_000_000.0),
         orderflow_momentum_share=_env_float("ORDERFLOW_MOMENTUM_SHARE", 0.70),

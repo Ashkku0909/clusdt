@@ -35,7 +35,14 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI
 
-from binance_orderflow import AlertBudget, OrderflowEngine, RestGate, run_orderflow_cli, run_ws_test
+from binance_orderflow import (
+    AlertBudget,
+    OrderflowEngine,
+    RestGate,
+    dump_baseline_seed,
+    run_orderflow_cli,
+    run_ws_test,
+)
 from binance_news import run_binance_news_cycle
 from cftc_data import run_cftc_cycle
 from config import BASE_DIR, Config, REQUIRED_FIELDS, load_config
@@ -221,6 +228,11 @@ def _parse_args(argv=None) -> argparse.Namespace:
     mode.add_argument("--news", action="store_true", help="只執行即時新聞掃描（嚴格 20 分鐘時間窗）")
     mode.add_argument("--binance-news", action="store_true", help="只掃描 Binance 官方公告（上幣/下架/維護）")
     mode.add_argument("--orderflow", action="store_true", help="訂單流行情快照（現價/24h 高低/ATR/門檻）")
+    mode.add_argument(
+        "--dump-baseline",
+        action="store_true",
+        help="抓一輪 24h 高低與 ATR，寫入 baseline_seed.json（部署後被限流時的備份基準）",
+    )
     mode.add_argument("--cftc", action="store_true", help="只檢查 CFTC 週度 Managed Money 籌碼")
     mode.add_argument("--health", action="store_true", help="檢查各資料源連線狀態（含 Binance）")
     mode.add_argument("--ping", action="store_true", help="發送一則連線測試訊息到 Telegram")
@@ -300,9 +312,10 @@ def main(argv=None) -> int:
 
     if args.health:
         return run_health(cfg)
-
     if args.ws_test is not None:
         return run_ws_test(cfg, float(max(5, args.ws_test)), symbol=args.symbol)
+    if args.dump_baseline:
+        return 0 if dump_baseline_seed(cfg) else 1
 
     _require_env(cfg)
 
