@@ -201,6 +201,9 @@ def _setup_logging(level: str) -> None:
         format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
         datefmt="%H:%M:%S",
     )
+    # 第三方套件降噪：即使 LOG_LEVEL=DEBUG，也不逐條打印 WS 訊息與 HTTP 連線
+    for noisy in ("websockets", "urllib3", "httpx", "asyncio"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 def _fix_console_encoding() -> None:
