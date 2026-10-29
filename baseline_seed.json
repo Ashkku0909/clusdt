@@ -1,324 +1,324 @@
 {
  "CLUSDT": {
   "symbol": "CLUSDT",
-  "kline_interval": "15m",
-  "atr": 0.34799188433701506,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 0.6483744210701196,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 101.58,
+   "last_price": 101.86,
    "high_24h": 103.6,
    "low_24h": 100.69,
-   "quote_volume_24h": 1257494621.7524,
-   "trade_count_24h": 914547,
-   "fetched_at": "2026-10-29T10:49:53.124834+00:00"
+   "quote_volume_24h": 1259547481.667,
+   "trade_count_24h": 932418,
+   "fetched_at": "2026-10-29T12:37:31.675609+00:00"
   }
  },
  "BTCUSDT": {
   "symbol": "BTCUSDT",
-  "kline_interval": "15m",
-  "atr": 151.92913136221233,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 363.83300551133834,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 80289.9,
+   "last_price": 80078.0,
    "high_24h": 81759.0,
    "low_24h": 79666.9,
-   "quote_volume_24h": 11370062878.35,
-   "trade_count_24h": 2922345,
-   "fetched_at": "2026-10-29T10:49:53.476760+00:00"
+   "quote_volume_24h": 11078470948.57,
+   "trade_count_24h": 2867684,
+   "fetched_at": "2026-10-29T12:37:32.024287+00:00"
   }
  },
  "ETHUSDT": {
   "symbol": "ETHUSDT",
-  "kline_interval": "15m",
-  "atr": 6.821854370986118,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 15.324866353161019,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 2326.79,
+   "last_price": 2321.29,
    "high_24h": 2391.49,
    "low_24h": 2292.2,
-   "quote_volume_24h": 8103582054.12,
-   "trade_count_24h": 4373651,
-   "fetched_at": "2026-10-29T10:49:53.867348+00:00"
+   "quote_volume_24h": 7931434895.76,
+   "trade_count_24h": 4328784,
+   "fetched_at": "2026-10-29T12:37:32.616324+00:00"
   }
  },
  "SOLUSDT": {
   "symbol": "SOLUSDT",
-  "kline_interval": "15m",
-  "atr": 0.31825445240778444,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 0.757337737356696,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 100.66,
+   "last_price": 100.39,
    "high_24h": 103.89,
    "low_24h": 99.16,
-   "quote_volume_24h": 1523270926.599,
-   "trade_count_24h": 1838325,
-   "fetched_at": "2026-10-29T10:49:54.192396+00:00"
+   "quote_volume_24h": 1536842283.4688,
+   "trade_count_24h": 1828891,
+   "fetched_at": "2026-10-29T12:37:32.972250+00:00"
   }
  },
  "XRPUSDT": {
   "symbol": "XRPUSDT",
-  "kline_interval": "15m",
-  "atr": 0.0039664437837828356,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 0.009263058143895282,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 1.2938,
+   "last_price": 1.2898,
    "high_24h": 1.3439,
-   "low_24h": 1.286,
-   "quote_volume_24h": 620046189.3114,
-   "trade_count_24h": 1333105,
-   "fetched_at": "2026-10-29T10:49:54.577066+00:00"
+   "low_24h": 1.2855,
+   "quote_volume_24h": 597419804.2399,
+   "trade_count_24h": 1326886,
+   "fetched_at": "2026-10-29T12:37:33.307006+00:00"
   }
  },
  "LINKUSDT": {
   "symbol": "LINKUSDT",
-  "kline_interval": "15m",
-  "atr": 0.0531381674184511,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 0.12557943809480446,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 11.589,
+   "last_price": 11.619,
    "high_24h": 12.023,
    "low_24h": 11.283,
-   "quote_volume_24h": 146972144.517,
-   "trade_count_24h": 496327,
-   "fetched_at": "2026-10-29T10:49:54.920832+00:00"
+   "quote_volume_24h": 146399553.31,
+   "trade_count_24h": 502213,
+   "fetched_at": "2026-10-29T12:37:33.669660+00:00"
   }
  },
  "ENAUSDT": {
   "symbol": "ENAUSDT",
-  "kline_interval": "15m",
-  "atr": 0.001724937159337229,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 0.004196029358886399,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 0.20277,
+   "last_price": 0.20313,
    "high_24h": 0.21477,
    "low_24h": 0.19277,
-   "quote_volume_24h": 335235206.52597,
-   "trade_count_24h": 1957812,
-   "fetched_at": "2026-10-29T10:49:55.246177+00:00"
+   "quote_volume_24h": 328101139.53757,
+   "trade_count_24h": 1993220,
+   "fetched_at": "2026-10-29T12:37:34.011057+00:00"
   }
  },
  "XAUUSDT": {
   "symbol": "XAUUSDT",
-  "kline_interval": "15m",
-  "atr": 6.449386194667803,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 15.385942176502894,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 4035.24,
+   "last_price": 4035.57,
    "high_24h": 4089.05,
    "low_24h": 4024.04,
-   "quote_volume_24h": 2353268681.46,
-   "trade_count_24h": 1922190,
-   "fetched_at": "2026-10-29T10:49:55.607985+00:00"
+   "quote_volume_24h": 2417079131.97,
+   "trade_count_24h": 2015758,
+   "fetched_at": "2026-10-29T12:37:34.357010+00:00"
   }
  },
  "XAGUSDT": {
   "symbol": "XAGUSDT",
-  "kline_interval": "15m",
-  "atr": 0.1978790607456225,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 0.48522785261727736,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 52.96,
+   "last_price": 52.67,
    "high_24h": 54.73,
-   "low_24h": 52.59,
-   "quote_volume_24h": 1241144064.3758,
-   "trade_count_24h": 773433,
-   "fetched_at": "2026-10-29T10:49:55.954616+00:00"
+   "low_24h": 52.45,
+   "quote_volume_24h": 1308087892.6458,
+   "trade_count_24h": 813752,
+   "fetched_at": "2026-10-29T12:37:34.716152+00:00"
   }
  },
  "BNBUSDT": {
   "symbol": "BNBUSDT",
-  "kline_interval": "15m",
-  "atr": 2.7519572184615475,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 5.406615585552792,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 743.05,
-   "high_24h": 762.8,
-   "low_24h": 740.05,
-   "quote_volume_24h": 659093428.685,
-   "trade_count_24h": 1438044,
-   "fetched_at": "2026-10-29T10:49:56.325790+00:00"
+   "last_price": 741.59,
+   "high_24h": 761.27,
+   "low_24h": 738.7,
+   "quote_volume_24h": 646081609.488,
+   "trade_count_24h": 1415499,
+   "fetched_at": "2026-10-29T12:37:35.050703+00:00"
   }
  },
  "COINUSDT": {
   "symbol": "COINUSDT",
-  "kline_interval": "15m",
-  "atr": 0.4364985708125647,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 1.205839768557576,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 158.39,
+   "last_price": 158.01,
    "high_24h": 162.81,
    "low_24h": 156.5,
-   "quote_volume_24h": 53735626.8148,
-   "trade_count_24h": 292149,
-   "fetched_at": "2026-10-29T10:49:56.645753+00:00"
+   "quote_volume_24h": 52277427.0048,
+   "trade_count_24h": 289567,
+   "fetched_at": "2026-10-29T12:37:35.443989+00:00"
   }
  },
  "HOODUSDT": {
   "symbol": "HOODUSDT",
-  "kline_interval": "15m",
-  "atr": 0.2888921988236793,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 0.8429985569169879,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 89.98,
+   "last_price": 89.52,
    "high_24h": 92.74,
-   "low_24h": 86.7,
-   "quote_volume_24h": 97603429.5822,
-   "trade_count_24h": 427691,
-   "fetched_at": "2026-10-29T10:49:56.970463+00:00"
+   "low_24h": 87.95,
+   "quote_volume_24h": 88219024.0042,
+   "trade_count_24h": 395053,
+   "fetched_at": "2026-10-29T12:37:35.794424+00:00"
   }
  },
  "SPCXUSDT": {
   "symbol": "SPCXUSDT",
-  "kline_interval": "15m",
-  "atr": 0.356871604762293,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 0.9538134580004155,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 144.34,
-   "high_24h": 150.03,
+   "last_price": 142.89,
+   "high_24h": 149.28,
    "low_24h": 142.53,
-   "quote_volume_24h": 717358984.8794,
-   "trade_count_24h": 1069878,
-   "fetched_at": "2026-10-29T10:49:57.314184+00:00"
+   "quote_volume_24h": 722472157.7696,
+   "trade_count_24h": 1103474,
+   "fetched_at": "2026-10-29T12:37:36.155265+00:00"
   }
  },
  "CRCLUSDT": {
   "symbol": "CRCLUSDT",
-  "kline_interval": "15m",
-  "atr": 0.23338340294784649,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 0.6505187453539621,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 79.84,
-   "high_24h": 82.75,
+   "last_price": 79.51,
+   "high_24h": 82.18,
    "low_24h": 78.98,
-   "quote_volume_24h": 231706664.3877,
-   "trade_count_24h": 697225,
-   "fetched_at": "2026-10-29T10:49:57.676989+00:00"
+   "quote_volume_24h": 222568569.555,
+   "trade_count_24h": 678022,
+   "fetched_at": "2026-10-29T12:37:36.492237+00:00"
   }
  },
  "MUUSDT": {
   "symbol": "MUUSDT",
-  "kline_interval": "15m",
-  "atr": 4.126003249748392,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 9.692185481817935,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 958.6,
+   "last_price": 954.25,
    "high_24h": 991.33,
    "low_24h": 942.09,
-   "quote_volume_24h": 781063015.0492,
-   "trade_count_24h": 2023947,
-   "fetched_at": "2026-10-29T10:49:58.292327+00:00"
+   "quote_volume_24h": 787379941.1024,
+   "trade_count_24h": 2047636,
+   "fetched_at": "2026-10-29T12:37:36.832765+00:00"
   }
  },
  "SNDKUSDT": {
   "symbol": "SNDKUSDT",
-  "kline_interval": "15m",
-  "atr": 7.840473340576825,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 17.31801479946962,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 1376.43,
+   "last_price": 1362.78,
    "high_24h": 1421.06,
    "low_24h": 1337.81,
-   "quote_volume_24h": 2340071264.5503,
-   "trade_count_24h": 4093869,
-   "fetched_at": "2026-10-29T10:49:58.608388+00:00"
+   "quote_volume_24h": 2289862722.4055,
+   "trade_count_24h": 4078855,
+   "fetched_at": "2026-10-29T12:37:37.187516+00:00"
   }
  },
  "NVDAUSDT": {
   "symbol": "NVDAUSDT",
-  "kline_interval": "15m",
-  "atr": 0.42014639473660426,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 1.035595933982393,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 214.57,
+   "last_price": 213.94,
    "high_24h": 220.61,
    "low_24h": 212.81,
-   "quote_volume_24h": 258988246.5309,
-   "trade_count_24h": 473695,
-   "fetched_at": "2026-10-29T10:49:58.958119+00:00"
+   "quote_volume_24h": 263568109.677,
+   "trade_count_24h": 483522,
+   "fetched_at": "2026-10-29T12:37:37.577672+00:00"
   }
  },
  "MSFTUSDT": {
   "symbol": "MSFTUSDT",
-  "kline_interval": "15m",
-  "atr": 2.1340017699230858,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 5.489681931696858,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 546.65,
+   "last_price": 540.68,
    "high_24h": 568.63,
    "low_24h": 526.94,
-   "quote_volume_24h": 176782419.7806,
-   "trade_count_24h": 470421,
-   "fetched_at": "2026-10-29T10:49:59.271388+00:00"
+   "quote_volume_24h": 189956080.1795,
+   "trade_count_24h": 514170,
+   "fetched_at": "2026-10-29T12:37:37.919688+00:00"
   }
  },
  "AAPLUSDT": {
   "symbol": "AAPLUSDT",
-  "kline_interval": "15m",
-  "atr": 0.3956771606843703,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 0.8584358425670818,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 348.44,
-   "high_24h": 348.62,
+   "last_price": 348.09,
+   "high_24h": 349.04,
    "low_24h": 343.94,
-   "quote_volume_24h": 64788072.7905,
-   "trade_count_24h": 224575,
-   "fetched_at": "2026-10-29T10:49:59.625194+00:00"
+   "quote_volume_24h": 65925215.8474,
+   "trade_count_24h": 228957,
+   "fetched_at": "2026-10-29T12:37:38.253894+00:00"
   }
  },
  "AMZNUSDT": {
   "symbol": "AMZNUSDT",
-  "kline_interval": "15m",
-  "atr": 0.575802668875617,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 1.4314147042602048,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 252.84,
+   "last_price": 249.4,
    "high_24h": 257.65,
-   "low_24h": 251.09,
-   "quote_volume_24h": 57462238.9202,
-   "trade_count_24h": 214164,
-   "fetched_at": "2026-10-29T10:49:59.976651+00:00"
+   "low_24h": 249.16,
+   "quote_volume_24h": 62016759.9597,
+   "trade_count_24h": 229356,
+   "fetched_at": "2026-10-29T12:37:38.635678+00:00"
   }
  },
  "METAUSDT": {
   "symbol": "METAUSDT",
-  "kline_interval": "15m",
-  "atr": 1.024449397912101,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 2.6335612952457614,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 620.34,
+   "last_price": 618.72,
    "high_24h": 625.47,
    "low_24h": 610.14,
-   "quote_volume_24h": 87922510.3027,
-   "trade_count_24h": 317623,
-   "fetched_at": "2026-10-29T10:50:00.492447+00:00"
+   "quote_volume_24h": 87662801.6456,
+   "trade_count_24h": 317031,
+   "fetched_at": "2026-10-29T12:37:39.291447+00:00"
   }
  },
  "GOOGLUSDT": {
   "symbol": "GOOGLUSDT",
-  "kline_interval": "15m",
-  "atr": 1.0811340683014676,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 3.0772416602432116,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 292.34,
+   "last_price": 287.86,
    "high_24h": 328.04,
-   "low_24h": 288.22,
-   "quote_volume_24h": 807499062.5814,
-   "trade_count_24h": 1881284,
-   "fetched_at": "2026-10-29T10:50:00.853120+00:00"
+   "low_24h": 287.68,
+   "quote_volume_24h": 890717050.6462,
+   "trade_count_24h": 2021056,
+   "fetched_at": "2026-10-29T12:37:39.793638+00:00"
   }
  },
  "TSLAUSDT": {
   "symbol": "TSLAUSDT",
-  "kline_interval": "15m",
-  "atr": 0.8827103921869235,
-  "saved_at": "2026-10-29T10:49:53.020743+00:00",
+  "kline_interval": "1h",
+  "atr": 2.03585696142892,
+  "saved_at": "2026-10-29T12:37:31.502847+00:00",
   "snapshot": {
-   "last_price": 403.95,
-   "high_24h": 412.14,
+   "last_price": 403.12,
+   "high_24h": 411.7,
    "low_24h": 397.93,
-   "quote_volume_24h": 159894974.9376,
-   "trade_count_24h": 447286,
-   "fetched_at": "2026-10-29T10:50:01.217657+00:00"
+   "quote_volume_24h": 159252584.7128,
+   "trade_count_24h": 445703,
+   "fetched_at": "2026-10-29T12:37:40.258098+00:00"
   }
  }
 }
