@@ -13,8 +13,10 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 
 import requests
 
@@ -60,6 +62,8 @@ class CftcPosition:
     open_interest: int | None
     oi_change: int | None
     contract_units: str
+    barrels_per_contract: int = 1000
+    net_history: tuple[int, ...] = ()  # 新 → 舊（最多 4 週）
 
 
 def _to_int(value) -> int | None:
@@ -67,6 +71,17 @@ def _to_int(value) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _barrels_per_contract(units: str) -> int:
+    """CFTC 回傳的 contract_units，例如 '(CONTRACTS OF 1,000 BARRELS)' → 1000。"""
+    match = re.search(r"([\d,]+)\s*BARREL", (units or "").upper())
+    if match:
+        try:
+            return max(1, int(match.group(1).replace(",", "")))
+        except ValueError:
+            pass
+    return 1000
 
 
 def fetch_market_history(cfg: Config, code: str, limit: int = 5) -> list[dict]:
@@ -135,6 +150,12 @@ def build_position(symbol: str, rows: list[dict]) -> CftcPosition | None:
         net_change = long_change = short_change = None
 
     report_date = str(latest.get("report_date_as_yyyy_mm_dd", ""))[:10]
+    net_history: list[int] = []
+    for row in usable[:4]:
+        row_long = _to_int(row.get("m_money_positions_long_all")) or 0
+        row_short = _to_int(row.get("m_money_positions_short_all")) or 0
+        net_history.append(row_long - row_short)
+    units = str(latest.get("contract_units", "") or "")
     return CftcPosition(
         symbol=symbol,
         market=str(latest.get("market_and_exchange_names", "")).strip(),
@@ -148,7 +169,9 @@ def build_position(symbol: str, rows: list[dict]) -> CftcPosition | None:
         mm_short_change=short_change,
         open_interest=_to_int(latest.get("open_interest_all")),
         oi_change=_to_int(latest.get("change_in_open_interest_all")),
-        contract_units=str(latest.get("contract_units", "") or ""),
+        contract_units=units,
+        barrels_per_contract=_barrels_per_contract(units),
+        net_history=tuple(net_history),
     )
 
 
@@ -189,25 +212,106 @@ def _signed(value: int | None) -> str:
     return f"{value:+,}" if value is not None else "—"
 
 
+WEEKDAY_ZH = ("週一", "週二", "週三", "週四", "週五", "週六", "週日")
+
+
+def _parse_date(value: str) -> date | None:
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def _weekday_label(day: date, with_month: bool = True) -> str:
+    stamp = day.strftime("%m-%d") if with_month else day.strftime("%Y-%m-%d")
+    return f"{stamp}（{WEEKDAY_ZH[day.weekday()]}）"
+
+
+def _fmt_barrels(contracts: int, barrels_per_contract: int) -> str:
+    """口 → 桶（以億/萬桶表示，避免長串數字）。"""
+    barrels = abs(contracts) * barrels_per_contract
+    sign = "-" if contracts < 0 else "+"
+    if barrels >= 1_0000_0000:  # 1 億桶
+        return f"{sign}{barrels / 1_0000_0000:.2f} 億桶"
+    return f"{sign}{barrels / 1_0000:,.0f} 萬桶"
+
+
+MARKET_TITLES = {
+    "CL=F": "NYMEX WTI",
+    "BZ=F": "NYMEX Brent Last Day",
+}
+
+
+def _reference_price() -> float | None:
+    """從訂單流引擎的 WebSocket 快取取 CLUSDT 現價（零 I/O；取不到就略過）。"""
+    try:
+        from binance_orderflow import LATEST_PRICES
+    except Exception:  # noqa: BLE001 - 循環匯入或模組未載入
+        return None
+    price = LATEST_PRICES.get("CLUSDT")
+    return price if price and price > 0 else None
+
+
 def format_cftc_alert(position: CftcPosition) -> str:
-    oi_line = (
-        f"📦 **總 OI**: {position.open_interest:,} 口（週變 {_signed(position.oi_change)}）"
-        if position.open_interest is not None
-        else "📦 **總 OI**: —"
+    barrels = position.mm_net * position.barrels_per_contract
+    price = _reference_price()
+    notional = f"｜名義 {barrels * price / 1_0000_0000:+.1f} 億美元" if price else ""
+    oi_share = (
+        f"｜佔 OI {position.mm_net / position.open_interest * 100:+.1f}%"
+        if position.open_interest
+        else ""
     )
-    return "\n".join(
-        [
-            "🚨 **【NYMEX 原油期貨 資金異動警報】**",
-            "━━━━━━━━━━━━━━━━━━",
-            "📊 **標的**: CFTC 週報｜Managed Money｜NYMEX WTI (067651)",
-            f"🧭 **淨持倉**: {position.mm_net:,} 口（週變 {_signed(position.mm_net_change)}）",
-            f"📈 **多單**: {position.mm_long:,}（週變 {_signed(position.mm_long_change)}）",
-            f"📉 **空單**: {position.mm_short:,}（週變 {_signed(position.mm_short_change)}）",
-            oi_line,
-            f"🗓 **報告日**: {position.report_date}",
-            "━━━━━━━━━━━━━━━━━━",
-        ]
-    )
+
+    lines = [
+        f"📊 **【CFTC 週度機構持倉 · {MARKET_TITLES.get(position.symbol, position.symbol)}】**",
+        "━━━━━━━━━━━━━━━━━━",
+        f"🧭 **管理基金淨持倉**: {position.mm_net:,} 口"
+        f"（≈ {_fmt_barrels(position.mm_net, position.barrels_per_contract)}{notional}）",
+        f"　│ 週變 {_signed(position.mm_net_change)} 口{oi_share}",
+        f"📈 **多單**: {position.mm_long:,} 口（週變 {_signed(position.mm_long_change)}）",
+        f"📉 **空單**: {position.mm_short:,} 口（週變 {_signed(position.mm_short_change)}）",
+    ]
+    if position.open_interest is not None:
+        lines.append(f"📦 **總持倉 OI**: {position.open_interest:,} 口（週變 {_signed(position.oi_change)}）")
+
+    # 近幾週淨持倉趨勢（機構是持續加倉還是減倉）
+    history = list(position.net_history)  # 新 → 舊
+    if len(history) >= 2:
+        sequence = " → ".join(f"{value:,}" for value in reversed(history))
+        diffs = [history[i] - history[i + 1] for i in range(len(history) - 1)]
+        streak = 1
+        for diff in diffs[1:]:  # 第一筆已計入 streak
+            if (diffs[0] > 0 and diff > 0) or (diffs[0] < 0 and diff < 0):
+                streak += 1
+            else:
+                break
+        if diffs[0] > 0:
+            trend = f"連續加倉 {streak} 週" if streak >= 2 else "本週加倉"
+        elif diffs[0] < 0:
+            trend = f"連續減倉 {streak} 週" if streak >= 2 else "本週減倉"
+        else:
+            trend = "本週持平"
+        lines.append(f"📊 **近 {len(history)} 週淨持倉**: {sequence}（{trend}）")
+
+    report_day = _parse_date(position.report_date)
+    if report_day is not None:
+        release_day = report_day + timedelta(days=3)  # 週二收盤 → 週五 15:30 ET 發布
+        next_release = report_day + timedelta(days=10)  # 下一期（下週二持倉）的週五發布
+        delay = (datetime.now(timezone.utc).date() - report_day).days
+        lines.append(
+            f"🗓 **報告日**: {report_day.isoformat()}（週二收盤）｜上期發布 {_weekday_label(release_day)}"
+        )
+        lines.append(
+            f"　│ 資料延遲 {delay} 天｜下次發布 {_weekday_label(next_release)}15:30 ET"
+        )
+    else:
+        lines.append(f"🗓 **報告日**: {position.report_date}")
+
+    lines += [
+        "━━━━━━━━━━━━━━━━━━",
+        "💡 週度機構倉位＝背景資訊（非即時訊號）；即時方向請看 CLUSDT 訂單流",
+    ]
+    return "\n".join(lines)
 
 
 def run_cftc_cycle(cfg, dispatcher, state, dry_run: bool = False, force: bool = False) -> int:

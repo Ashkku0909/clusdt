@@ -83,6 +83,9 @@ log = logging.getLogger(__name__)
 REST_BASE = "https://fapi.binance.com"
 WS_COMBINED = "wss://fstream.binance.com/stream?streams={streams}"
 
+# 各標的最新價（由 WS ticker 更新）：供其他模組（例如 CFTC 名義價值）零 I/O 讀取
+LATEST_PRICES: dict[str, float] = {}
+
 # 依序探測：CLUSDT 為 Binance 現行「原油 (CL)」永續合約代碼
 CANDIDATE_SYMBOLS: tuple[str, ...] = ("CLUSDT", "OILUSDT")
 FALLBACK_BASE_ASSETS: tuple[str, ...] = ("CL", "OIL", "WTI", "BRENT", "CRUDE")
@@ -680,6 +683,7 @@ class OrderflowEngine:
             quote_volume_24h=quote_volume,
             trade_count_24h=trades,
         )
+        LATEST_PRICES[self.symbol] = last
         self.apply_calibration(self.snapshot)
 
     def _apply_ws_kline(self, data: dict) -> None:
@@ -790,6 +794,7 @@ class OrderflowEngine:
                 return
             self.snapshot = snapshot
             self.atr = atr
+            LATEST_PRICES[self.symbol] = snapshot.last_price
             self._remember_closed_bar(rows)
             self._save_baseline()
             self.apply_calibration(snapshot)
