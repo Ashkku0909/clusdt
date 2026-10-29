@@ -209,9 +209,22 @@ def health() -> dict:
 
 @app.get("/status")
 def status() -> dict:
-    """引擎健康看板：WS 連線數、成交量、訊號數、REST 熔斷剩餘時間。"""
+    """引擎健康看板：WS 連線數、成交量、訊號數、REST 熔斷剩餘時間與目前生效的訊號參數。"""
     summary = _engine_summary()
     summary["server_time"] = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+    if _engines:
+        sample = _engines[0]
+        summary["settings"] = {
+            "atr_interval": sample.kline_interval,
+            "sl_atr_mult": sample.atr_mult,
+            "tp1_atr_mult": sample.tp1_mult,
+            "tp2_atr_mult": sample.tp2_mult,
+            "min_tp1_pct": sample.min_tp1_pct,
+            "min_grade": sample.min_grade,
+            "cooldown_sec": sample.cooldown_sec,
+            "min_gap_sec": sample.min_gap_sec,
+            "min_move_pct": sample.min_move_pct,
+        }
     summary["symbols"] = [engine.health() for engine in list(_engines)]
     return {"status": "ok", **summary}
 
