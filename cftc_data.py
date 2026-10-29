@@ -227,11 +227,15 @@ def _weekday_label(day: date, with_month: bool = True) -> str:
     return f"{stamp}（{WEEKDAY_ZH[day.weekday()]}）"
 
 
-def _fmt_barrels(contracts: int, barrels_per_contract: int) -> str:
-    """口 → 千桶（WTI 1 口 = 1,000 桶，故口數即千桶數，最直觀）。"""
+def _fmt_kbbl(contracts: int | None, barrels_per_contract: int, signed: bool = False) -> str:
+    """口 → 千桶（WTI 1 口 = 1,000 桶，故口數即千桶數）。"""
+    if contracts is None:
+        return "—"
     thousands = abs(contracts) * barrels_per_contract / 1000.0
-    sign = "-" if contracts < 0 else "+"
-    return f"{sign}{thousands:,.0f} 千桶"
+    if signed:
+        sign = "-" if contracts < 0 else "+"
+        return f"{sign}{thousands:,.0f}"
+    return f"{thousands:,.0f}"
 
 
 MARKET_TITLES = {
@@ -251,31 +255,37 @@ def _reference_price() -> float | None:
 
 
 def format_cftc_alert(position: CftcPosition) -> str:
-    barrels = position.mm_net * position.barrels_per_contract
+    bpc = position.barrels_per_contract
+    barrels = position.mm_net * bpc
     price = _reference_price()
     notional = f"｜名義 {barrels * price / 1_0000_0000:+.1f} 億美元" if price else ""
     oi_share = (
-        f"｜佔 OI {position.mm_net / position.open_interest * 100:+.1f}%"
+        f"{position.mm_net / position.open_interest * 100:+.1f}%"
         if position.open_interest
-        else ""
+        else "—"
     )
 
     lines = [
         f"📊 **【CFTC 週度機構持倉 · {MARKET_TITLES.get(position.symbol, position.symbol)}】**",
         "━━━━━━━━━━━━━━━━━━",
-        f"🧭 **管理基金淨持倉**: {_fmt_barrels(position.mm_net, position.barrels_per_contract)}"
-        f"（= {position.mm_net:,} 口{notional}）",
-        f"　│ 週變 {_signed(position.mm_net_change)} 口{oi_share}",
-        f"📈 **多單**: {position.mm_long:,} 口（週變 {_signed(position.mm_long_change)}）",
-        f"📉 **空單**: {position.mm_short:,} 口（週變 {_signed(position.mm_short_change)}）",
+        f"🧭 **管理基金淨持倉**: {_fmt_kbbl(position.mm_net, bpc, signed=True)} 千桶"
+        f"（週變 {_fmt_kbbl(position.mm_net_change, bpc, signed=True)}{notional}）",
+        f"　│ 佔 OI {oi_share}",
+        f"📈 **多單**: {_fmt_kbbl(position.mm_long, bpc)} 千桶"
+        f"（週變 {_fmt_kbbl(position.mm_long_change, bpc, signed=True)}）",
+        f"📉 **空單**: {_fmt_kbbl(position.mm_short, bpc)} 千桶"
+        f"（週變 {_fmt_kbbl(position.mm_short_change, bpc, signed=True)}）",
     ]
     if position.open_interest is not None:
-        lines.append(f"📦 **總持倉 OI**: {position.open_interest:,} 口（週變 {_signed(position.oi_change)}）")
+        lines.append(
+            f"📦 **總持倉 OI**: {_fmt_kbbl(position.open_interest, bpc)} 千桶"
+            f"（週變 {_fmt_kbbl(position.oi_change, bpc, signed=True)}）"
+        )
 
     # 近幾週淨持倉趨勢（機構是持續加倉還是減倉）
     history = list(position.net_history)  # 新 → 舊
     if len(history) >= 2:
-        sequence = " → ".join(f"{value:,}" for value in reversed(history))
+        sequence = " → ".join(_fmt_kbbl(value, bpc) for value in reversed(history))
         diffs = [history[i] - history[i + 1] for i in range(len(history) - 1)]
         streak = 1
         for diff in diffs[1:]:  # 第一筆已計入 streak
@@ -289,7 +299,7 @@ def format_cftc_alert(position: CftcPosition) -> str:
             trend = f"連續減倉 {streak} 週" if streak >= 2 else "本週減倉"
         else:
             trend = "本週持平"
-        lines.append(f"📊 **近 {len(history)} 週淨持倉**: {sequence}（{trend}）")
+        lines.append(f"📊 **近 {len(history)} 週淨持倉**: {sequence} 千桶（{trend}）")
 
     report_day = _parse_date(position.report_date)
     if report_day is not None:
@@ -307,7 +317,7 @@ def format_cftc_alert(position: CftcPosition) -> str:
 
     lines += [
         "━━━━━━━━━━━━━━━━━━",
-        "💡 週度機構倉位＝背景資訊（非即時訊號）；即時方向請看 CLUSDT 訂單流",
+        "💡 1 口 = 1,000 桶（1 千桶）；週度倉位為背景資訊，即時方向請看 CLUSDT 訂單流",
     ]
     return "\n".join(lines)
 
