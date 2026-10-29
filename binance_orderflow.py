@@ -55,6 +55,7 @@ import contextlib
 import json
 import logging
 import math
+import random
 import re
 import threading
 import time
@@ -66,7 +67,15 @@ from typing import Deque, Iterable
 import requests
 import websockets
 
-from market_context import GRADE_RANK, MarketContext, context_line, fetch_market_context, grade_signal
+from market_context import (
+    GRADE_RANK,
+    MarketContext,
+    context_line,
+    fetch_market_context,
+    grade_signal,
+    load_context_cache,
+    save_context_cache,
+)
 
 log = logging.getLogger(__name__)
 
@@ -413,7 +422,7 @@ def format_orderflow_alert(signal: OrderflowSignal) -> str:
         f"進場區間：${_fmt_price(signal.entry_low)} – ${_fmt_price(signal.entry_high)}（限價）",
         f"止損位：${_fmt_price(signal.stop_loss)} (ATR {signal.atr_mult:g}x)",
         f"止盈：TP1 ${_fmt_price(signal.tp1)}｜TP2 ${_fmt_price(signal.tp2)}",
-        f"評級：{signal.grade}（{'資料不足' if signal.grade == '—' else f'{signal.score} 分'}）",
+        f"評級：{'—（技術面暫不可用，純量價）' if signal.grade == '—' else f'{signal.grade}（{signal.score} 分）'}",
         f"性質：{signal.nature}",
         f"大單金額：${signal.notional:,.0f}",
         f"成交量：{signal.qty:,.2f} 手",
@@ -624,7 +633,9 @@ class OrderflowEngine:
         """
         now = time.monotonic()
         if self.gate.blocked() or now < self._refresh_fail_until:
-            return  # 418/429 封鎖期間：一般與強制刷新皆暂停
+            # 418/429 封鎖期間：一般與強制刷新皆暫停，僅沿用既有／快取資料
+            self._restore_cached_context()
+            return
         if not force and now < self._next_refresh_at:
             return
         if not self._refresh_lock.acquire(blocking=False):
@@ -678,17 +689,32 @@ class OrderflowEngine:
         if not force and now < self._next_context_at:
             return
         try:
-            self.context = fetch_market_context(self.session, self.symbol)
-            self._next_context_at = time.monotonic() + self.ta_refresh_sec
+            context = fetch_market_context(self.session, self.symbol)
         except Exception as exc:  # noqa: BLE001 - 上下文失敗不阻塞交易
             ban = parse_ban_seconds(exc, self.gate.default_ban_sec)
             if ban is not None:
                 self.gate.block_for(ban)
-                self._next_context_at = time.monotonic() + ban
+                self._next_context_at = time.monotonic() + ban + random.uniform(0.0, 20.0)
                 log.warning("%s 上下文失敗：全體 REST 熔斷 %.0f 秒（不再重試）", self.symbol, ban)
             else:
-                self._next_context_at = time.monotonic() + 60.0
+                self._next_context_at = time.monotonic() + 60.0 + random.uniform(0.0, 30.0)
                 log.warning("%s 市場上下文取得失敗（60 秒後重試）：%s", self.symbol, exc)
+            self._restore_cached_context()
+            return
+        self.context = context
+        self._next_context_at = time.monotonic() + self.ta_refresh_sec
+        save_context_cache(context)
+
+    def _restore_cached_context(self) -> None:
+        """限流／重啟時沿用上次成功的上下文（最多 6 小時），至少保留評級能力。"""
+        if self.context is not None:
+            return
+        cached = load_context_cache(self.symbol)
+        if cached is None:
+            return
+        self.context = cached
+        age_min = (datetime.now(timezone.utc) - cached.fetched_at).total_seconds() / 60.0
+        log.info("%s 沿用磁碟快取上下文（%.0f 分鐘前，限流期間暫代）", self.symbol, age_min)
 
     # ------------------------------------------------------------------ #
     # 純邏輯：逐筆成交 → 訊號判斷（可離線單元測試）

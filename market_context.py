@@ -9,9 +9,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 
 import requests
 
@@ -21,6 +23,8 @@ REST_BASE = "https://fapi.binance.com"
 FRAME_INTERVALS = ("15m", "1h", "4h", "1d")
 CVD_BARS = 20
 OI_PERIOD = "15m"
+CACHE_DIR = Path(__file__).resolve().parent / "data" / "context"
+CACHE_MAX_AGE_SEC = 6 * 3600.0
 
 OI_MATRIX_LABELS = {
     "long_buildup": "多頭增倉",
@@ -163,6 +167,87 @@ def _json(session: requests.Session, path: str, params: dict, timeout=(6.0, 20.0
     return response.json()
 
 
+def save_context_cache(context: MarketContext, directory: Path | None = None) -> None:
+    """把成功的上下文寫到磁碟，供限流／重啟期間沿用（附「N 分鐘前」標記）。"""
+    target_dir = directory or CACHE_DIR
+    payload = {
+        "symbol": context.symbol,
+        "price": context.price,
+        "funding_rate": context.funding_rate,
+        "oi_now_usd": context.oi_now_usd,
+        "oi_change_15m_pct": context.oi_change_15m_pct,
+        "oi_change_1h_pct": context.oi_change_1h_pct,
+        "oi_matrix": context.oi_matrix,
+        "oi_matrix_label": context.oi_matrix_label,
+        "fetched_at": context.fetched_at.isoformat(),
+        "frames": {
+            interval: {
+                "interval": frame.interval,
+                "adx": frame.adx,
+                "plus_di": frame.plus_di,
+                "minus_di": frame.minus_di,
+                "atr": frame.atr,
+                "cvd_usd": frame.cvd_usd,
+                "price_change_pct": frame.price_change_pct,
+                "trend": frame.trend,
+            }
+            for interval, frame in context.frames.items()
+        },
+    }
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        (target_dir / f"{context.symbol}.json").write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
+    except OSError as exc:  # noqa: BLE001 - 快取失敗不影響主流程
+        log.debug("%s 上下文快取寫入失敗：%s", context.symbol, exc)
+
+
+def load_context_cache(
+    symbol: str, max_age_sec: float = CACHE_MAX_AGE_SEC, directory: Path | None = None
+) -> MarketContext | None:
+    """讀回磁碟快取；超過 max_age_sec 視為過期回傳 None。"""
+    path = (directory or CACHE_DIR) / f"{symbol}.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        fetched_at = datetime.fromisoformat(payload["fetched_at"])
+        if fetched_at.tzinfo is None:
+            fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+    except (OSError, ValueError, KeyError):
+        return None
+    age = (datetime.now(timezone.utc) - fetched_at).total_seconds()
+    if age > max_age_sec:
+        return None
+    try:
+        frames = {
+            interval: FrameContext(
+                interval=row["interval"],
+                adx=float(row["adx"]),
+                plus_di=float(row["plus_di"]),
+                minus_di=float(row["minus_di"]),
+                atr=float(row["atr"]),
+                cvd_usd=float(row["cvd_usd"]),
+                price_change_pct=float(row["price_change_pct"]),
+                trend=str(row["trend"]),
+            )
+            for interval, row in payload["frames"].items()
+        }
+        return MarketContext(
+            symbol=payload["symbol"],
+            price=float(payload["price"]),
+            funding_rate=float(payload["funding_rate"]),
+            oi_now_usd=float(payload["oi_now_usd"]),
+            oi_change_15m_pct=float(payload["oi_change_15m_pct"]),
+            oi_change_1h_pct=float(payload["oi_change_1h_pct"]),
+            oi_matrix=str(payload["oi_matrix"]),
+            oi_matrix_label=str(payload["oi_matrix_label"]),
+            frames=frames,
+            fetched_at=fetched_at,
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def fetch_market_context(session: requests.Session, symbol: str, bars: int = 120) -> MarketContext:
     frames: dict[str, FrameContext] = {}
     price = 0.0
@@ -302,7 +387,7 @@ def grade_signal(context: MarketContext | None, direction: str, kind: str) -> tu
 def context_line(context: MarketContext | None, reasons: list[str] | None = None) -> str:
     """警報用的一行上下文摘要。"""
     if context is None:
-        return "市場上下文：資料不足（ADX/CVD/OI 未就緒）"
+        return "市場上下文：暫不可用（交易所限流，數據約 5 分鐘內自動恢復）"
     frame15 = context.frame("15m")
     frame1h = context.frame("1h")
     parts = []
@@ -318,4 +403,7 @@ def context_line(context: MarketContext | None, reasons: list[str] | None = None
     parts.append(f"資金費率 {context.funding_rate * 100:+.4f}%")
     if reasons:
         parts.append("、".join(reasons[:4]))
+    age_min = (datetime.now(timezone.utc) - context.fetched_at).total_seconds() / 60.0
+    if age_min >= 15:
+        parts.append(f"⚠️ 數據 {age_min:.0f} 分鐘前")
     return "｜".join(parts)
