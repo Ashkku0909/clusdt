@@ -50,12 +50,20 @@ services:
         value: "0.3"
       - key: ORDERFLOW_ATR_MULT
         value: "1.5"
+      - key: ORDERFLOW_KLINE_INTERVAL
+        value: "1h"
+      - key: ORDERFLOW_TP1_ATR_MULT
+        value: "2.0"
+      - key: ORDERFLOW_TP2_ATR_MULT
+        value: "4.0"
+      - key: ORDERFLOW_MIN_TP1_PCT
+        value: "0.6"
       - key: ORDERFLOW_COOLDOWN_SEC
-        value: "60"
-      - key: ORDERFLOW_MIN_GAP_SEC
         value: "300"
+      - key: ORDERFLOW_MIN_GAP_SEC
+        value: "900"
       - key: ORDERFLOW_MIN_MOVE_PCT
-        value: "0.12"
+        value: "0.35"
       - key: ORDERFLOW_SNAPSHOT_MAX_AGE_SEC
         value: "10800"
       - key: ORDERFLOW_ENABLE_MOMENTUM

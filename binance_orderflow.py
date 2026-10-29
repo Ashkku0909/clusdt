@@ -26,9 +26,11 @@
    成交價必須距離 24h 高點或低點 <= ORDERFLOW_SR_PROXIMITY_PCT（預設 0.3%），
    否則視為「中段噪音」直接壓制。
 
-4. 止損：ATR(14)（15m K 線，Wilder EMA 平滑）之 ORDERFLOW_ATR_MULT 倍（預設 1.5）。
-      做多止損 = 進場價 − 1.5 × ATR
-      做空止損 = 進場價 + 1.5 × ATR
+4. 止損／目標：ATR(14)（預設 1h K 線，Wilder EMA 平滑）
+      止損 = 進場價 ∓ ORDERFLOW_ATR_MULT × ATR（預設 1.5）
+      TP1  = 進場價 ± ORDERFLOW_TP1_ATR_MULT × ATR（預設 2.0）
+      TP2  = 進場價 ± ORDERFLOW_TP2_ATR_MULT × ATR（預設 4.0）
+   若 TP1 距離 < ORDERFLOW_MIN_TP1_PCT（預設 0.8%）→ 目標太近，跟單者吃不到，直接壓制
 
 5. 額外訊號（可用環境變數分別開關，增加訊號多樣性）：
    a. 動能突破 momentum：60 秒同向 delta >= ORDERFLOW_MOMENTUM_USD 且主動佔比 >= 70%，
@@ -41,10 +43,11 @@
 工程設計：
 - WebSocket 斷線自動重連（指數退避 5s → 10s → 20s → 40s → 60s 上限）
 - 24h 高低點與 ATR 每 ORDERFLOW_TA_REFRESH_SEC（預設 300s）以 REST 背景刷新（to_thread）；
-  失敗僅指數退避重試（418/429 直接封鎖 1 小時），**絕不逐筆重試**，
-  行情基準超過 ORDERFLOW_SNAPSHOT_MAX_AGE_SEC（預設 1800s）自動停發新訊號
-- 每個方向獨立冷卻（預設 60s），外加全域最小警報間隔 ORDERFLOW_MIN_GAP_SEC（預設 300s）
-  與同方向最小價格推移 ORDERFLOW_MIN_MOVE_PCT（預設 0.12%）——三層防刷頻
+  失敗僅指數退避重試（418/429 熔斷），**絕不逐筆重試**；
+  磁碟快取（data/baseline 與 baseline_seed.json）讓限流期間仍可運作；
+  行情基準超過 ORDERFLOW_SNAPSHOT_MAX_AGE_SEC（預設 10800s）才完全停發
+- 每個方向獨立冷卻（預設 300s），外加全域最小警報間隔 ORDERFLOW_MIN_GAP_SEC（預設 900s）
+  與同方向最小價格推移 ORDERFLOW_MIN_MOVE_PCT（預設 0.35%）——三層防刷頻
 - ``run_forever()`` 為 asyncio 任務，於 FastAPI lifespan 以 ``asyncio.create_task`` 常駐
 """
 
@@ -425,14 +428,27 @@ def _fmt_price(value: float) -> str:
 
 def format_orderflow_alert(signal: OrderflowSignal) -> str:
     """依既定模板輸出警報（純文字，Telegram 端僅做 Markdown→HTML 轉義）。"""
+    entry = signal.entry_price
+    long_side = signal.direction == "long"
+
+    def _pct(target: float) -> str:
+        change = (target - entry) / entry * 100.0
+        return f"{change:+.2f}%"
+
+    risk = abs(entry - signal.stop_loss) / entry * 100.0
+    reward1 = abs(signal.tp1 - entry) / entry * 100.0
+    reward2 = abs(signal.tp2 - entry) / entry * 100.0
+    rr = f"1:{reward1 / risk:.1f}｜1:{reward2 / risk:.1f}" if risk > 0 else "—"
     lines = [
         f"{DIRECTION_LIGHTS[signal.direction]} 【{symbol_label(signal.symbol)} {KIND_LABELS.get(signal.kind, KIND_LABELS['sweep'])}】",
         "━━━━━━━━━━━━━━━━━━",
         f"方向：{DIRECTION_LABELS[signal.direction]}",
-        f"進場位：${_fmt_price(signal.entry_price)}",
+        f"進場位：${_fmt_price(entry)}",
         f"進場區間：${_fmt_price(signal.entry_low)} – ${_fmt_price(signal.entry_high)}（限價）",
-        f"止損位：${_fmt_price(signal.stop_loss)} (ATR {signal.atr_mult:g}x)",
-        f"止盈：TP1 ${_fmt_price(signal.tp1)}｜TP2 ${_fmt_price(signal.tp2)}",
+        f"止損位：${_fmt_price(signal.stop_loss)}（{_pct(signal.stop_loss)}｜ATR {signal.atr_mult:g}x）",
+        f"止盈：TP1 ${_fmt_price(signal.tp1)}（{_pct(signal.tp1)}）"
+        f"｜TP2 ${_fmt_price(signal.tp2)}（{_pct(signal.tp2)}）",
+        f"盈虧比：{rr}",
         f"評級：{'—（技術面暫不可用，純量價）' if signal.grade == '—' else f'{signal.grade}（{signal.score} 分）'}",
         f"性質：{signal.nature}",
         f"大單金額：${signal.notional:,.0f}",
@@ -527,6 +543,9 @@ class OrderflowEngine:
         self.proximity_pct = float(cfg.orderflow_sr_proximity_pct)
         self.atr_period = int(cfg.orderflow_atr_period)
         self.atr_mult = float(cfg.orderflow_atr_mult)
+        self.tp1_mult = float(getattr(cfg, "orderflow_tp1_atr_mult", 2.0))
+        self.tp2_mult = float(getattr(cfg, "orderflow_tp2_atr_mult", 4.0))
+        self.min_tp1_pct = float(getattr(cfg, "orderflow_min_tp1_pct", 0.8))
         self.kline_interval = cfg.orderflow_kline_interval
         self.cooldown_sec = float(cfg.orderflow_cooldown_sec)
         self.ta_refresh_sec = float(cfg.orderflow_ta_refresh_sec)
@@ -596,6 +615,7 @@ class OrderflowEngine:
             "suppressed_budget": 0,
             "suppressed_grade": 0,
             "suppressed_bad_tick": 0,
+            "suppressed_tp": 0,
             "max_single_notional": 0.0,
             "max_buy_flow": 0.0,
             "max_sell_flow": 0.0,
@@ -1095,6 +1115,11 @@ class OrderflowEngine:
             self.stats["suppressed_grade"] += 1
             log.debug("評級 %s（%d 分）低於門檻 %s，壓制", grade, score, self.min_grade)
             return None
+        # 技術面不可用時，量價背離沒有參考點（純靠 TA 反向）→ 不發
+        if grade == "—" and candidate.kind == "divergence":
+            self.stats["suppressed_grade"] += 1
+            log.debug("技術面不可用，壓制量價背離訊號")
+            return None
 
         # --- 全域警報預算（所有標的共用 1 小時上限）---
         if self.budget is not None and not self.budget.allow(clock):
@@ -1104,14 +1129,25 @@ class OrderflowEngine:
 
         atr = self.atr
         if direction == "long":
-            entry_low, entry_high = price - 0.05 * atr, price + 0.02 * atr
-            tp1, tp2 = price + 1.5 * atr, price + 3.0 * atr
+            entry_low, entry_high = price - 0.15 * atr, price + 0.05 * atr
+            tp1, tp2 = price + self.tp1_mult * atr, price + self.tp2_mult * atr
         else:
-            entry_low, entry_high = price - 0.02 * atr, price + 0.05 * atr
-            tp1, tp2 = price - 1.5 * atr, price - 3.0 * atr
+            entry_low, entry_high = price - 0.05 * atr, price + 0.15 * atr
+            tp1, tp2 = price - self.tp1_mult * atr, price - self.tp2_mult * atr
         stop_loss = (
             price - self.atr_mult * self.atr if direction == "long" else price + self.atr_mult * self.atr
         )
+        # 目標太近（跟單者喫不到、手續費+滑點就吞掉）→ 等更大波動再發
+        tp1_pct = abs(tp1 - price) / price * 100.0
+        if tp1_pct < self.min_tp1_pct:
+            self.stats["suppressed_tp"] += 1
+            log.debug(
+                "%s TP1 僅 %.2f%%（< %.2f%% 最低要求），等波動放大再發",
+                self.symbol,
+                tp1_pct,
+                self.min_tp1_pct,
+            )
+            return None
         signal = OrderflowSignal(
             symbol=self.symbol,
             direction=direction,
@@ -1271,7 +1307,7 @@ class OrderflowEngine:
     def stats_line(self) -> str:
         return (
             "trades=%d｜單筆巨量=%d｜窗口觸發=%d｜訊號=%d（sweep=%d/mom=%d/abs=%d/div=%d）"
-            "｜S/R 壓制=%d｜冷卻壓制=%d｜間隔壓制=%d｜同價壓制=%d｜過期壓制=%d｜預算壓制=%d｜評級壓制=%d｜異常價=%d"
+            "｜S/R 壓制=%d｜冷卻壓制=%d｜間隔壓制=%d｜同價壓制=%d｜過期壓制=%d｜預算壓制=%d｜評級壓制=%d｜異常價=%d｜目標過近=%d"
             "｜單筆最大=$%.0f｜買峰=$%.0f｜賣峰=$%.0f"
             % (
                 self.stats["trades"],
@@ -1290,6 +1326,7 @@ class OrderflowEngine:
                 self.stats["suppressed_budget"],
                 self.stats["suppressed_grade"],
                 self.stats["suppressed_bad_tick"],
+                self.stats["suppressed_tp"],
                 self.stats["max_single_notional"],
                 self.stats["max_buy_flow"],
                 self.stats["max_sell_flow"],
