@@ -45,20 +45,22 @@ Local: Windows, Python 3.12 venv at `d:\github\clusdt\.venv`.
 `window_usd = clamp(4.5 × 24hQuoteVolume / 5760, $100k, $12M)`; `block = 0.5×window`; `momentum = 2×window`; `absorption = divergence = 3×window`.
 
 **4 deterministic signal kinds:**
-1. `sweep` — single trade ≥ block, or 15s same-side flow ≥ window, **and** price within 0.3% of 24h high/low.
-2. `momentum` — 60s delta ≥ momentum, one side ≥ 70% share, price makes new 24h high/low.
-3. `absorption` — 60s total ≥ absorption, 60s move ≤ 0.08%, sitting at a level without breaking it.
-4. `divergence` — 300s net delta ≥ divergence against the 300s price direction.
+1. `sweep` — single trade ≥ block, or **60s** same-side flow ≥ window, **and** price within 0.3% of 24h high/low.
+2. `momentum` — **300s** delta ≥ momentum, one side ≥ 70% share, price makes new 24h high/low (skipped if already extended >0.8×ATR beyond the extreme).
+3. `absorption` — **300s** total ≥ absorption, 300s move ≤ 0.08%, sitting at a level without breaking it.
+4. `divergence` — **900s** net delta ≥ divergence against the 900s price direction.
 
-**Levels (all ATR-based, ATR = ATR(14) on 1h klines, Wilder):**
-- Entry zone: price −0.25×ATR … price +0.10×ATR (long), mirrored for short.
-- Stop loss: `min(price − 1.5×ATR, entry_low − 0.2×ATR)` (long; mirrored short) — always outside the entry zone.
-- TP1 = 3×ATR, TP2 = 5×ATR (R:R ≈ 1:2 / 1:3.3).
+**Levels (ATR = ATR(14) on 4h klines, Wilder):**
+- Entry zone: price −0.50×ATR … price +0.15×ATR (long), mirrored for short — wide enough to be a pullback limit order.
+- Stop loss: `min(price − 1.8×ATR, entry_low − 0.35×ATR)` (long; mirrored short) — always outside the entry zone.
+- TP1 = 3.6×ATR, TP2 = 6.0×ATR (R:R ≈ 1:2.0 / 1:3.3).
 
 **Quality filters (this is where the channel's reputation lives):**
-- TP1 distance < `ORDERFLOW_MIN_TP1_PCT` (1.2%) → drop the signal.
-- S/R proximity 0.3%, per-direction cooldown 900s, global gap 1800s, same-direction min move 0.8%, global budget 20 alerts/hour.
-- Grade gate `ORDERFLOW_MIN_GRADE=B` (needs context). When context is unavailable (`—`): divergence is blocked, other kinds additionally require flow ≥ momentum threshold.
+- TP1 distance < `ORDERFLOW_MIN_TP1_PCT` (2.5%, or 1.8% for XAU/XAG) → drop the signal; stop distance < `ORDERFLOW_MIN_SL_PCT` (1.0%) → drop.
+- S/R proximity 0.3%, per-direction cooldown **7200s**, global gap **2700s**, same-direction move ≥2.5% or ≥1.5×ATR, global budget 20 alerts/hour.
+- **Context is mandatory** (`ORDERFLOW_REQUIRE_CONTEXT=1`): no signal may ever carry `評級：—`; if context is missing or older than 2700s the signal is dropped and the symbol is queued for self-healing.
+- Grade gate `ORDERFLOW_MIN_GRADE=B` with **A ≥ 82 / B ≥ 70**; hard veto (grade capped at C) when 1d+4h both oppose the direction, or when CVD opposes a `momentum`/`sweep`.
+- Context older than 20 min costs −10 points.
 - Bad ticks: parser rejects `p<=0 or q<=0`; `_finalize` rejects prices >25% away from the reference price.
 
 **Alert card (Traditional Chinese, Markdown → Telegram HTML)** shows direction light, entry + limit zone, stop with % + ATR multiple, TP1/TP2 with %, R:R, grade, nature, notional, size, key level, context line, and an execution note ("30 min unfilled / price beyond zone by 0.5×ATR → skip").
@@ -96,8 +98,8 @@ Context is cached to `data/context/{SYMBOL}.json` (6h) and reused during REST ou
 - CLIs: `--serve`, `--once`, `--loop`, `--news`, `--binance-news`, `--orderflow`, `--cftc`, `--equity`, `--health`, `--ping`, `--ws-test N`, `--dump-baseline`.
 
 ## 10. Current tuning state (as of the latest change)
-`ATR interval 1h`; `SL 1.5×ATR`; `TP1 3×ATR`; `TP2 5×ATR`; `min TP1 1.2%`; `min grade B`; `cooldown 900s`; `global gap 1800s`; `min move 0.8%`.
-Expected volume: **≤ 2 signal cards per hour**, each with TP1 ≥ 1.2% and R:R ≥ 1:2.
+`ATR interval 4h`; `SL 1.8×ATR`; `TP1 3.6×ATR`; `TP2 6.0×ATR`; `min TP1 2.5%` (metals 1.8%), `min SL 1.0%`; `min grade B`; `cooldown 7200s`; `global gap 2700s`; `same-direction move ≥2.5% or ≥1.5×ATR`; context required and self-healed by a single-flight queue (one symbol every 8s, cold-start REST staggered by index × 6s).
+Expected volume: **a handful of swing cards per day**, each with TP1 ≥ 2.5% and R:R ≥ 1:2.
 
 ## 11. Known traps / gotchas
 - Editing `.env` alone does nothing on Render — `render.yaml` holds the production env vars; keep both in sync.

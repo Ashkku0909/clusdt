@@ -20,7 +20,7 @@ import requests
 log = logging.getLogger(__name__)
 
 REST_BASE = "https://fapi.binance.com"
-FRAME_INTERVALS = ("15m", "1h", "4h", "1d")
+FRAME_INTERVALS = ("1h", "4h", "1d")
 CVD_BARS = 20
 OI_PERIOD = "15m"
 CACHE_DIR = Path(__file__).resolve().parent / "data" / "context"
@@ -261,7 +261,7 @@ def fetch_market_context(session: requests.Session, symbol: str, bars: int = 120
         cvd = compute_cvd_usd(klines)
         closes = [float(row[4]) for row in klines]
         move = (closes[-1] - closes[0]) / closes[0] * 100.0 if closes[0] else 0.0
-        if interval == "15m":
+        if interval == "1h":
             price = closes[-1]
             ref = closes[-5] if len(closes) >= 5 else closes[0]
             price_change_1h = (closes[-1] - ref) / ref * 100.0 if ref else 0.0
@@ -313,19 +313,28 @@ def fetch_market_context(session: requests.Session, symbol: str, bars: int = 120
 # 訊號評分（A/B/C；確定性）
 # --------------------------------------------------------------------- #
 GRADE_RANK = {"—": 2, "C": 0, "B": 1, "A": 2}
+GRADE_A_SCORE = 82
+GRADE_B_SCORE = 70
+STALE_CONTEXT_PENALTY_MIN = 20  # 上下文超過 20 分鐘 → −10 分
 
 
-def grade_signal(context: MarketContext | None, direction: str, kind: str) -> tuple[int, str, list[str]]:
-    """回傳 (分數 0-100, 等級 A/B/—, 理由列表)。"""
+def grade_signal(
+    context: MarketContext | None,
+    direction: str,
+    kind: str,
+    context_age: float | None = None,
+) -> tuple[int, str, list[str]]:
+    """回傳 (分數 0-100, 等級 A/B/C/—, 理由列表)；完全確定性。"""
     if context is None:
         return 0, "—", []
     score = 55
     reasons: list[str] = []
-    frame15 = context.frame("15m")
+    frame_near = context.frame("1h")
     frame1h = context.frame("1h")
     frame4h = context.frame("4h")
+    frame1d = context.frame("1d")
 
-    # 高周期趋势对齐（1h 优先，4h 辅助）
+    # 高周期趨勢對齊（1h 主、4h 輔、1d 為背景）
     for frame in (frame1h, frame4h):
         if frame is None or frame.trend == "range":
             continue
@@ -337,16 +346,30 @@ def grade_signal(context: MarketContext | None, direction: str, kind: str) -> tu
             score -= 12
             reasons.append(f"{frame.interval} 趨勢反向")
 
-    # CVD（15m）方向
-    if frame15 is not None:
-        cvd_aligned = (frame15.cvd_usd > 0 and direction == "long") or (frame15.cvd_usd < 0 and direction == "short")
-        if abs(frame15.cvd_usd) > 0:
-            if cvd_aligned:
-                score += 10
-                reasons.append("CVD 同向")
-            else:
-                score -= 8
-                reasons.append("CVD 反向")
+    # 硬否決：1d 與 4h 同時反向 → 逆勢單直接降為 C
+    counter_trend = False
+    if frame1d is not None and frame4h is not None:
+        both_up = frame1d.trend == "up" and frame4h.trend == "up"
+        both_down = frame1d.trend == "down" and frame4h.trend == "down"
+        if (direction == "short" and both_up) or (direction == "long" and both_down):
+            counter_trend = True
+            reasons.append("1d+4h 逆勢否決")
+
+    # CVD（1h 帧）方向
+    cvd_aligned: bool | None = None
+    if frame_near is not None and abs(frame_near.cvd_usd) > 0:
+        cvd_aligned = (frame_near.cvd_usd > 0 and direction == "long") or (
+            frame_near.cvd_usd < 0 and direction == "short"
+        )
+        if cvd_aligned:
+            score += 10
+            reasons.append("CVD 同向")
+        else:
+            score -= 8
+            reasons.append("CVD 反向")
+
+    # 硬否決：momentum / sweep 不得逆 CVD
+    cvd_veto = kind in ("momentum", "sweep") and cvd_aligned is False
 
     # OI 增减仓矩阵
     oi_bonus = {
@@ -371,16 +394,23 @@ def grade_signal(context: MarketContext | None, direction: str, kind: str) -> tu
 
     # 信号类型加分与震荡抑制
     score += {"absorption": 8, "momentum": 6, "divergence": 4}.get(kind, 0)
-    if frame15 is not None:
-        if frame15.adx < 18:
+    if frame_near is not None:
+        if frame_near.adx < 18:
             score -= 20
-            reasons.append(f"ADX15m {frame15.adx:.0f}（震盪）")
-        elif frame15.adx >= 25:
+            reasons.append(f"ADX1h {frame_near.adx:.0f}（震盪）")
+        elif frame_near.adx >= 25:
             score += 5
-            reasons.append(f"ADX15m {frame15.adx:.0f}（趨勢）")
+            reasons.append(f"ADX1h {frame_near.adx:.0f}（趨勢）")
+
+    # 上下文陳舊扣分（不信任舊數據的邊緣評分）
+    if context_age is not None and context_age > STALE_CONTEXT_PENALTY_MIN * 60:
+        score -= 10
+        reasons.append(f"上下文 {context_age / 60:.0f} 分鐘前")
 
     score = max(0, min(100, int(round(score))))
-    grade = "A" if score >= 78 else ("B" if score >= 62 else "C")
+    if counter_trend or cvd_veto:
+        return score, "C", reasons
+    grade = "A" if score >= GRADE_A_SCORE else ("B" if score >= GRADE_B_SCORE else "C")
     return score, grade, reasons
 
 
@@ -388,17 +418,20 @@ def context_line(context: MarketContext | None, reasons: list[str] | None = None
     """警報用的一行上下文摘要。"""
     if context is None:
         return "市場上下文：暫不可用（交易所限流，數據約 5 分鐘內自動恢復）"
-    frame15 = context.frame("15m")
+    frame_near = context.frame("1h")
     frame1h = context.frame("1h")
     parts = []
-    if frame15 is not None:
-        parts.append(f"ADX15m {frame15.adx:.0f}")
+    if frame_near is not None:
+        parts.append(f"ADX1h {frame_near.adx:.0f}")
     if frame1h is not None:
         parts.append(f"1h {frame1h.trend.upper() if frame1h.trend != 'range' else 'RANGE'}")
+    frame4h = context.frame("4h")
+    if frame4h is not None:
+        parts.append(f"4h {frame4h.trend.upper() if frame4h.trend != 'range' else 'RANGE'}")
     frame1d = context.frame("1d")
     if frame1d is not None:
         parts.append(f"1d {frame1d.trend.upper() if frame1d.trend != 'range' else 'RANGE'}")
-    parts.append(f"CVD15m ${frame15.cvd_usd / 1000:+,.0f}k" if frame15 else "CVD n/a")
+    parts.append(f"CVD1h ${frame_near.cvd_usd / 1000:+,.0f}k" if frame_near else "CVD n/a")
     parts.append(f"OI {context.oi_matrix_label} {context.oi_change_1h_pct:+.2f}%")
     parts.append(f"資金費率 {context.funding_rate * 100:+.4f}%")
     if reasons:

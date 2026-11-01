@@ -51,6 +51,34 @@ SEEN_MAX_AGE_HOURS = 48
 MARKETAUX_THROTTLE_FLAG = "news:marketaux:last_fetch"
 PARAGRAPH_MIN_CHARS = 60
 TRANSLATE_MAX_CHARS = 1500  # 單次翻譯長度上限（免費端點保護）
+SUMMARY_MAX_CHARS = 280  # 內文快讀中譯上限（避免截到半句）
+SENTENCE_ENDS = ".!?"
+SENTENCE_ENDS_ZH = "。！？」』…"
+
+
+def _trim_english_to_sentence(text: str, max_chars: int = 600) -> str:
+    """英文段落先切成完整句子再翻譯，避免譯文出現「凸顯持續」這種斷句。"""
+    clean = " ".join((text or "").split())
+    if len(clean) <= max_chars:
+        return clean
+    window = clean[:max_chars]
+    cut = max(window.rfind(f"{ch} ") for ch in SENTENCE_ENDS)
+    if cut > 0:
+        return window[: cut + 1].strip()
+    space = window.rfind(" ")
+    return (window[:space] if space > 0 else window).strip()
+
+
+def _trim_chinese_to_sentence(text: str, max_chars: int = SUMMARY_MAX_CHARS) -> str:
+    """中文摘要在句末收尾（。！？」…），絕不半句截斷。"""
+    body = (text or "").strip()
+    if len(body) <= max_chars:
+        return body
+    window = body[:max_chars]
+    cut = max(window.rfind(ch) for ch in SENTENCE_ENDS_ZH)
+    if cut > 0:
+        return window[: cut + 1].strip()
+    return window.rstrip() + "…"
 
 # deep-translator 偶發會把 Google 錯誤頁當成翻譯結果回傳，需攔截
 GARBAGE_MARKERS = (
@@ -487,6 +515,7 @@ def run_news_cycle(
     seen = state.get_section(SEEN_SECTION)
     filtered = state.get_section(FILTERED_SECTION)
     load_translation_cache(state)
+    recent_titles: list[str] = []
     sent = 0
     for entry in fresh:
         if sent >= limit:
@@ -501,10 +530,11 @@ def run_news_cycle(
         if not paragraphs and item.summary.strip():
             log.info("內文擷取失敗，改用來源摘要（feed summary）")
             paragraphs = [item.summary.strip()]
+        paragraphs = [_trim_english_to_sentence(p) for p in paragraphs if p.strip()]
 
         verdict = None
         if cfg.news_importance_filter and cfg.deepseek_api_key:
-            verdict = score_news(cfg, item.title, " ".join(paragraphs))
+            verdict = score_news(cfg, item.title, " ".join(paragraphs), recent_headlines=recent_titles)
             if verdict is None:
                 log.info("重要性評分不可用（fail-open，照常推播）")
             elif verdict.score < cfg.news_min_importance:
@@ -535,6 +565,9 @@ def run_news_cycle(
             log.warning("標題翻譯失敗（三層引擎皆不可用），丟棄：%s", item.url)
             continue
         paragraphs_zh = [zh for zh in translated[1:] if zh]
+        body_zh = _trim_chinese_to_sentence("\n\n".join(paragraphs_zh)) if paragraphs_zh else ""
+        if body_zh:
+            paragraphs_zh = [body_zh]
 
         alert = format_news_alert(
             item,
@@ -546,6 +579,7 @@ def run_news_cycle(
         )
         if dispatcher.send_alert(alert, dry_run=dry_run):
             sent += 1
+            recent_titles.append(item.title)
             if not dry_run:
                 stamp = datetime.now(timezone.utc).isoformat()
                 for key in keys:

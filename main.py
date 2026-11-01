@@ -36,6 +36,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI
 
 from binance_orderflow import (
+    CONTEXT_HEALER,
     AlertBudget,
     OrderflowEngine,
     RestGate,
@@ -152,14 +153,17 @@ async def _start_orderflow_engine() -> None:
     budget = AlertBudget(cfg.orderflow_max_alerts_per_hour)
     gate = RestGate()
     symbols = list(cfg.binance_symbols)
-    context_spread = min(60.0, float(cfg.orderflow_ta_refresh_sec)) / max(1, len(symbols))
+    stagger = float(getattr(cfg, "orderflow_context_stagger_sec", 6.0))
+    CONTEXT_HEALER.configure(float(getattr(cfg, "orderflow_heal_interval_sec", 8.0)))
     tasks: list[asyncio.Task] = []
     engines: list[OrderflowEngine] = []
     started: list[str] = []
     for index, code in enumerate(symbols):
         engine = OrderflowEngine(cfg, dispatcher, symbol=code, budget=budget, gate=gate)
-        # 上下文錯開抓取：把 23 個標的分散在 60 秒內，避免啟動瞬間爆量
-        engine._next_context_at = time.monotonic() + index * context_spread
+        # 冷啟動錯峰：23 個標的的 REST 刷新 / 上下文依 index 拉開，避免同時打爆權重
+        delay = index * stagger
+        engine._next_refresh_at = time.monotonic() + delay
+        engine._next_context_at = time.monotonic() + delay
         try:
             await asyncio.to_thread(engine.resolve)
         except Exception as exc:  # noqa: BLE001 - 限流時沿用預設代碼，稍後自動重試
@@ -167,7 +171,7 @@ async def _start_orderflow_engine() -> None:
         tasks.append(asyncio.create_task(engine.run_forever(), name=f"orderflow-{engine.symbol}"))
         engines.append(engine)
         started.append(engine.symbol)
-        await asyncio.sleep(0.5)  # 錯峰啟動，避免 23 個標的同時打 REST
+        await asyncio.sleep(0.25)  # 連線錯峰（REST 已由 _next_refresh_at 控制）
     _engine_tasks = tasks
     _engines.clear()
     _engines.extend(engines)
@@ -212,6 +216,16 @@ def status() -> dict:
     """引擎健康看板：WS 連線數、成交量、訊號數、REST 熔斷剩餘時間與目前生效的訊號參數。"""
     summary = _engine_summary()
     summary["server_time"] = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+    summary["healing_queue_size"] = CONTEXT_HEALER.size()
+    summary["healing_pending"] = CONTEXT_HEALER.pending_symbols()
+    summary["healed_total"] = CONTEXT_HEALER.repaired
+    now = datetime.now(timezone.utc)
+    summary["stale_context_count"] = sum(
+        1
+        for engine in list(_engines)
+        if engine.context is None
+        or (now - engine.context.fetched_at).total_seconds() > engine.context_max_age_sec
+    )
     if _engines:
         sample = _engines[0]
         summary["settings"] = {
@@ -220,10 +234,16 @@ def status() -> dict:
             "tp1_atr_mult": sample.tp1_mult,
             "tp2_atr_mult": sample.tp2_mult,
             "min_tp1_pct": sample.min_tp1_pct,
+            "min_tp1_pct_metals": sample.min_tp1_pct_metals,
+            "min_sl_pct": sample.min_sl_pct,
             "min_grade": sample.min_grade,
             "cooldown_sec": sample.cooldown_sec,
             "min_gap_sec": sample.min_gap_sec,
             "min_move_pct": sample.min_move_pct,
+            "min_move_atr_mult": sample.min_move_atr_mult,
+            "breakout_cushion_atr": sample.breakout_cushion_atr,
+            "require_context": sample.require_context,
+            "context_max_age_sec": sample.context_max_age_sec,
         }
     summary["symbols"] = [engine.health() for engine in list(_engines)]
     return {"status": "ok", **summary}

@@ -446,7 +446,7 @@ def format_orderflow_alert(signal: OrderflowSignal) -> str:
         f"方向：{DIRECTION_LABELS[signal.direction]}",
         f"進場位：${_fmt_price(entry)}",
         f"進場區間：${_fmt_price(signal.entry_low)} – ${_fmt_price(signal.entry_high)}（限價）",
-        "執行：30 分鐘內未成交、或價格已超出區間 0.5×ATR 則放棄本單",
+        "執行：60 分鐘內未成交、或價格已超出區間 0.6×ATR 則放棄本單",
         f"止損位：${_fmt_price(signal.stop_loss)}（{_pct(signal.stop_loss)}｜ATR {signal.atr_mult:g}x）",
         f"止盈：TP1 ${_fmt_price(signal.tp1)}（{_pct(signal.tp1)}）"
         f"｜TP2 ${_fmt_price(signal.tp2)}（{_pct(signal.tp2)}）",
@@ -525,9 +525,77 @@ class AlertBudget:
         return True
 
 
+class ContextHealer:
+    """單飛上下文修復佇列。
+
+    Render 冷啟動或 418 解封後，23 個引擎同時打 REST 會立刻再次被封。
+    這裡把「缺上下文」的標的排進同一個佇列，一次只修一個、固定間隔（預設 8 秒），
+    全部 23 個標的在約 3 分鐘內確定修好，且總併發量永遠是 1。
+    """
+
+    def __init__(self, interval_sec: float = 8.0) -> None:
+        self.interval_sec = max(2.0, float(interval_sec))
+        self._lock = threading.Lock()
+        self._pending: dict[str, "OrderflowEngine"] = {}
+        self._next_at = 0.0
+        self._started = False
+        self.repaired = 0
+
+    def configure(self, interval_sec: float) -> None:
+        self.interval_sec = max(2.0, float(interval_sec))
+
+    def request(self, engine: "OrderflowEngine") -> None:
+        with self._lock:
+            self._pending.setdefault(engine.symbol, engine)
+            if self._started:
+                return
+            self._started = True
+        threading.Thread(target=self._loop, name="context-healer", daemon=True).start()
+
+    def size(self) -> int:
+        with self._lock:
+            return len(self._pending)
+
+    def pending_symbols(self) -> list[str]:
+        with self._lock:
+            return list(self._pending)
+
+    def _loop(self) -> None:
+        while True:
+            time.sleep(1.0)
+            try:
+                self.step()
+            except Exception:  # noqa: BLE001 - 背景執行緒不可中斷
+                log.debug("上下文修復迴圈例外", exc_info=True)
+
+    def step(self) -> None:
+        """處理佇列中的下一個標的（若已到間隔時間）。"""
+        now = time.monotonic()
+        if now < self._next_at:
+            return
+        with self._lock:
+            if not self._pending:
+                return
+            symbol = next(iter(self._pending))
+            engine = self._pending.pop(symbol)
+        if engine.gate.blocked():
+            # 限流中：稍後再排，不要浪費請求
+            self._next_at = now + 15.0
+            self.request(engine)
+            return
+        self._next_at = now + self.interval_sec
+        engine._refresh_context(force=True)
+        if engine.context is None:
+            self.request(engine)
+        else:
+            self.repaired += 1
+
+
+CONTEXT_HEALER = ContextHealer()
+
+
 class OrderflowEngine:
     """Binance 逐筆成交 → 大單／連續吃單偵測 → 固定模板警報（單一標的）。"""
-
     def __init__(
         self,
         cfg,
@@ -545,9 +613,16 @@ class OrderflowEngine:
         self.proximity_pct = float(cfg.orderflow_sr_proximity_pct)
         self.atr_period = int(cfg.orderflow_atr_period)
         self.atr_mult = float(cfg.orderflow_atr_mult)
-        self.tp1_mult = float(getattr(cfg, "orderflow_tp1_atr_mult", 2.0))
-        self.tp2_mult = float(getattr(cfg, "orderflow_tp2_atr_mult", 4.0))
-        self.min_tp1_pct = float(getattr(cfg, "orderflow_min_tp1_pct", 0.8))
+        self.tp1_mult = float(getattr(cfg, "orderflow_tp1_atr_mult", 3.6))
+        self.tp2_mult = float(getattr(cfg, "orderflow_tp2_atr_mult", 6.0))
+        self.min_tp1_pct = float(getattr(cfg, "orderflow_min_tp1_pct", 2.5))
+        self.min_tp1_pct_metals = float(getattr(cfg, "orderflow_min_tp1_pct_metals", 1.8))
+        self.min_sl_pct = float(getattr(cfg, "orderflow_min_sl_pct", 1.0))
+        self.min_move_atr_mult = float(getattr(cfg, "orderflow_min_move_atr_mult", 1.5))
+        self.breakout_cushion_atr = float(getattr(cfg, "orderflow_breakout_cushion_atr", 0.8))
+        self.require_context = bool(getattr(cfg, "orderflow_require_context", True))
+        self.context_max_age_sec = float(getattr(cfg, "orderflow_context_max_age_sec", 2700))
+        self.base_asset = self.symbol[:-4] if self.symbol.endswith("USDT") else self.symbol
         self.kline_interval = cfg.orderflow_kline_interval
         self.cooldown_sec = float(cfg.orderflow_cooldown_sec)
         self.ta_refresh_sec = float(cfg.orderflow_ta_refresh_sec)
@@ -592,10 +667,10 @@ class OrderflowEngine:
         self._last_msg_at = 0.0
         self._connected_at = 0.0
 
-        # 多尺度滾動窗口（15s 大單偵測 / 60s 動能與吸收 / 300s 背離）
-        self.win15 = FlowWindow(self.window_ms)
-        self.win60 = FlowWindow(60_000)
-        self.win300 = FlowWindow(300_000)
+        # 多尺度滾動窗口（4h swing：sweep 60s / 動能與吸收 5m / 背離 15m）
+        self.win_sweep = FlowWindow(self.window_ms)
+        self.win_momentum = FlowWindow(300_000)
+        self.win_div = FlowWindow(900_000)
         self._cooldown_until: dict[str, float] = {"long": 0.0, "short": 0.0}
         self._last_alert_at = -1.0e9  # 全域最小間隔用：最後一次「已發送」時間
         self._last_alert_price: dict[str, float] = {}  # 各方向最後一筆已發送價位
@@ -618,6 +693,9 @@ class OrderflowEngine:
             "suppressed_grade": 0,
             "suppressed_bad_tick": 0,
             "suppressed_tp": 0,
+            "suppressed_sl": 0,
+            "suppressed_context": 0,
+            "suppressed_cushion": 0,
             "max_single_notional": 0.0,
             "max_buy_flow": 0.0,
             "max_sell_flow": 0.0,
@@ -716,25 +794,27 @@ class OrderflowEngine:
         return self.symbol
 
     def apply_calibration(self, snapshot: MarketSnapshot) -> None:
-        """依 24h 成交額自動校準門檻（每 15 秒平均流量 × 係數，含地板／天花板）。
+        """依 24h 成交額自動校準門檻（每 60 秒平均流量 × 係數，含地板／天花板）。
 
-        BTC（$11.8B/24h）與 LINK（$150M/24h）流量差 ~80 倍，固定門檻不可用；
-        校準後各標的的門檻都代表「同一統計強度」的異常流量。
+        各窗口門檻都轉成「同等統計強度」：
+        - sweep 看 60s 窗口 → factor × 平均 60s 流量
+        - momentum/absorption 看 5 分鐘 → 約 2.8× / 3.3× 該窗口
+        - divergence 看 15 分鐘 → 約 10× 該窗口
         """
         if not self.auto_calibrate or snapshot.quote_volume_24h <= 0:
             return
-        flow_15s = snapshot.quote_volume_24h / 86400.0 * 15.0
-        window = self.calibration_factor * flow_15s
+        flow_60s = snapshot.quote_volume_24h / 86400.0 * 60.0
+        window = self.calibration_factor * flow_60s
         window = min(self.max_window_usd, max(self.min_window_usd, window))
         changed = abs(window - self.window_usd) / max(self.window_usd, 1.0) > 0.20
         self.window_usd = window
-        self.block_usd = window * 0.5
-        self.momentum_usd = window * 2.0
-        self.absorption_usd = window * 3.0
-        self.divergence_usd = window * 3.0
+        self.block_usd = window * 0.25
+        self.momentum_usd = window * 2.8
+        self.absorption_usd = window * 3.3
+        self.divergence_usd = window * 10.0
         if changed:
             log.info(
-                "門檻校準 %s：15s 窗口 $%s｜單筆 $%s｜動能60s $%s｜吸收60s $%s｜背離5m $%s",
+                "門檻校準 %s：60s 窗口 $%s｜單筆 $%s｜動能5m $%s｜吸收5m $%s｜背離15m $%s",
                 self.symbol,
                 f"{self.window_usd:,.0f}",
                 f"{self.block_usd:,.0f}",
@@ -862,19 +942,27 @@ class OrderflowEngine:
         self.stats["trades"] += 1
         self.stats["max_single_notional"] = max(self.stats["max_single_notional"], event.notional)
 
-        # --- 多尺度滾動窗口維護 ---
-        self.win15.add(event)
-        self.win60.add(event)
-        self.win300.add(event)
-        self.stats["max_buy_flow"] = max(self.stats["max_buy_flow"], self.win15.buy)
-        self.stats["max_sell_flow"] = max(self.stats["max_sell_flow"], self.win15.sell)
+        # --- 本地滾動 24h 高低點（WS 即時更新；REST 限流時仍反映真實極值）---
+        if self.snapshot is not None:
+            if event.price > self.snapshot.high_24h:
+                self.snapshot.high_24h = event.price
+            if event.price < self.snapshot.low_24h:
+                self.snapshot.low_24h = event.price
+            self.snapshot.last_price = event.price
 
-        # --- 15 秒大單統計（供 --ws-test 觀察）---
+        # --- 多尺度滾動窗口維護 ---
+        self.win_sweep.add(event)
+        self.win_momentum.add(event)
+        self.win_div.add(event)
+        self.stats["max_buy_flow"] = max(self.stats["max_buy_flow"], self.win_sweep.buy)
+        self.stats["max_sell_flow"] = max(self.stats["max_sell_flow"], self.win_sweep.sell)
+
+        # --- 大單統計（供 --ws-test 觀察）---
         single_hit = event.notional >= self.block_usd
         if single_hit:
             self.stats["single_blocks"] += 1
-        prev_flow = (self.win15.buy - event.notional) if event.taker_buy else (self.win15.sell - event.notional)
-        window_flow = self.win15.buy if event.taker_buy else self.win15.sell
+        prev_flow = (self.win_sweep.buy - event.notional) if event.taker_buy else (self.win_sweep.sell - event.notional)
+        window_flow = self.win_sweep.buy if event.taker_buy else self.win_sweep.sell
         if window_flow >= self.window_usd and prev_flow < self.window_usd:
             self.stats["window_triggers"] += 1
 
@@ -925,12 +1013,12 @@ class OrderflowEngine:
         near_low = dist_low <= self.proximity_pct
         candidates: list[SignalCandidate] = []
 
-        # 1) 巨量吸收：60 秒雙向總量巨大但價格推不動，且貼著關鍵位但「未」突破
+        # 1) 巨量吸收：5 分鐘雙向總量巨大但價格推不動，且貼著關鍵位但「未」突破
         if self.enable_absorption and (near_high or near_low):
-            first_60 = self.win60.first_price()
-            move_60 = abs(price - first_60) / first_60 * 100.0 if first_60 else float("inf")
-            if self.win60.total >= self.absorption_usd and move_60 <= self.absorption_range_pct:
-                buy_dominant = self.win60.buy >= self.win60.sell
+            first_300 = self.win_momentum.first_price()
+            move_300 = abs(price - first_300) / first_300 * 100.0 if first_300 else float("inf")
+            if self.win_momentum.total >= self.absorption_usd and move_300 <= self.absorption_range_pct:
+                buy_dominant = self.win_momentum.buy >= self.win_momentum.sell
                 direction = ""
                 level_kind = ""
                 if near_low and price > low and not buy_dominant:
@@ -944,8 +1032,8 @@ class OrderflowEngine:
                             kind="absorption",
                             direction=direction,
                             nature="關鍵位巨量吸收（掃單被接走）",
-                            notional=self.win60.total,
-                            qty=self.win60.buy_qty + self.win60.sell_qty,
+                            notional=self.win_momentum.total,
+                            qty=self.win_momentum.buy_qty + self.win_momentum.sell_qty,
                             trigger="absorption",
                             level_kind=level_kind,
                             level_price=level_price,
@@ -953,34 +1041,34 @@ class OrderflowEngine:
                         )
                     )
 
-        # 2) 量價背離：5 分鐘累計 delta 與價格方向相反
+        # 2) 量價背離：15 分鐘累計 delta 與價格方向相反
         if self.enable_divergence:
-            first_300 = self.win300.first_price()
-            delta_300 = self.win300.delta
-            if first_300 and abs(delta_300) >= self.divergence_usd:
-                move_300 = (price - first_300) / first_300 * 100.0
-                if delta_300 <= -self.divergence_usd and move_300 >= self.divergence_price_pct:
+            first_900 = self.win_div.first_price()
+            delta_900 = self.win_div.delta
+            if first_900 and abs(delta_900) >= self.divergence_usd:
+                move_900 = (price - first_900) / first_900 * 100.0
+                if delta_900 <= -self.divergence_usd and move_900 >= self.divergence_price_pct:
                     candidates.append(
                         SignalCandidate(
                             kind="divergence",
                             direction="short",
                             nature="量價背離（價漲量賣、疑似派發）",
-                            notional=abs(delta_300),
-                            qty=self.win300.sell_qty,
+                            notional=abs(delta_900),
+                            qty=self.win_div.sell_qty,
                             trigger="divergence",
                             level_kind="high",
                             level_price=high,
                             level_text=f"24h 高位區 ${high:,.2f}（距 {dist_high:.2f}%）",
                         )
                     )
-                elif delta_300 >= self.divergence_usd and move_300 <= -self.divergence_price_pct:
+                elif delta_900 >= self.divergence_usd and move_900 <= -self.divergence_price_pct:
                     candidates.append(
                         SignalCandidate(
                             kind="divergence",
                             direction="long",
                             nature="量價背離（價跌量買、疑似吸籌）",
-                            notional=abs(delta_300),
-                            qty=self.win300.buy_qty,
+                            notional=abs(delta_900),
+                            qty=self.win_div.buy_qty,
                             trigger="divergence",
                             level_kind="low",
                             level_price=low,
@@ -988,42 +1076,51 @@ class OrderflowEngine:
                         )
                     )
 
-        # 3) 動能突破：60 秒主動方向高度集中且價格創 24h 新高／新低
-        if self.enable_momentum and self.win60.total > 0:
-            delta_60 = self.win60.delta
-            buy_share = self.win60.buy / self.win60.total
-            if delta_60 >= self.momentum_usd and buy_share >= self.momentum_share and price >= high:
-                candidates.append(
-                    SignalCandidate(
-                        kind="momentum",
-                        direction="long",
-                        nature="動能突破（主動買壓制）",
-                        notional=self.win60.buy,
-                        qty=self.win60.buy_qty,
-                        trigger="momentum",
-                        level_kind="high",
-                        level_price=high,
-                        level_text=f"突破 24h 高點 ${high:,.2f}（新高效應）",
+        # 3) 動能突破：5 分鐘主動方向高度集中且價格創 24h 新高／新低
+        if self.enable_momentum and self.win_momentum.total > 0:
+            delta_300 = self.win_momentum.delta
+            buy_share = self.win_momentum.buy / self.win_momentum.total
+            cushion = self.breakout_cushion_atr * (self.atr or 0.0)
+            if delta_300 >= self.momentum_usd and buy_share >= self.momentum_share and price >= high:
+                if high > 0 and (price - high) > cushion:
+                    self.stats["suppressed_cushion"] += 1
+                    log.debug("多頭突破已超漲 %.2f%%（> %.2f×ATR），不追高", (price - high) / high * 100.0, self.breakout_cushion_atr)
+                else:
+                    candidates.append(
+                        SignalCandidate(
+                            kind="momentum",
+                            direction="long",
+                            nature="動能突破（主動買壓制）",
+                            notional=self.win_momentum.buy,
+                            qty=self.win_momentum.buy_qty,
+                            trigger="momentum",
+                            level_kind="high",
+                            level_price=high,
+                            level_text=f"突破 24h 高點 ${high:,.2f}（新高效應）",
+                        )
                     )
-                )
-            elif -delta_60 >= self.momentum_usd and (1.0 - buy_share) >= self.momentum_share and price <= low:
-                candidates.append(
-                    SignalCandidate(
-                        kind="momentum",
-                        direction="short",
-                        nature="動能突破（主動賣壓制）",
-                        notional=self.win60.sell,
-                        qty=self.win60.sell_qty,
-                        trigger="momentum",
-                        level_kind="low",
-                        level_price=low,
-                        level_text=f"跌破 24h 低點 ${low:,.2f}（新低效應）",
+            elif -delta_300 >= self.momentum_usd and (1.0 - buy_share) >= self.momentum_share and price <= low:
+                if low > 0 and (low - price) > cushion:
+                    self.stats["suppressed_cushion"] += 1
+                    log.debug("空頭突破已超跌 %.2f%%（> %.2f×ATR），不追空", (low - price) / low * 100.0, self.breakout_cushion_atr)
+                else:
+                    candidates.append(
+                        SignalCandidate(
+                            kind="momentum",
+                            direction="short",
+                            nature="動能突破（主動賣壓制）",
+                            notional=self.win_momentum.sell,
+                            qty=self.win_momentum.sell_qty,
+                            trigger="momentum",
+                            level_kind="low",
+                            level_price=low,
+                            level_text=f"跌破 24h 低點 ${low:,.2f}（新低效應）",
+                        )
                     )
-                )
 
-        # 4) 原有：15 秒單筆／同向累計吃單 + 關鍵位過濾
+        # 4) 原有：60 秒單筆／同向累計吃單 + 關鍵位過濾
         single_hit = event.notional >= self.block_usd
-        window_flow = self.win15.buy if event.taker_buy else self.win15.sell
+        window_flow = self.win_sweep.buy if event.taker_buy else self.win_sweep.sell
         window_hit = window_flow >= self.window_usd
         if not (single_hit or window_hit):
             return candidates
@@ -1049,7 +1146,7 @@ class OrderflowEngine:
         )
         if window_hit:
             notional_out = window_flow
-            qty_out = sum(t.qty for t in self.win15.events if t.taker_buy == event.taker_buy)
+            qty_out = sum(t.qty for t in self.win_sweep.events if t.taker_buy == event.taker_buy)
         else:
             notional_out = event.notional
             qty_out = event.qty
@@ -1084,6 +1181,24 @@ class OrderflowEngine:
             log.warning("%s 成交價 $%.4f 偏離基準現價 $%.4f 超過 25%%，疑似異常行情，丟棄", self.symbol, price, reference)
             return None
 
+        # --- 必須有可用技術面（絕不發「評級：—」）---
+        if self.context is None:
+            self._restore_cached_context()
+        context_age = None
+        if self.context is not None:
+            context_age = (datetime.now(timezone.utc) - self.context.fetched_at).total_seconds()
+        if self.require_context and (context_age is None or context_age > self.context_max_age_sec):
+            self.stats["suppressed_context"] += 1
+            CONTEXT_HEALER.request(self)
+            log.debug(
+                "%s 技術面%s，壓制並排入修復佇列",
+                self.symbol,
+                "缺失" if context_age is None else f"已 {context_age / 60.0:.0f} 分鐘未更新",
+            )
+            return None
+
+        atr = self.atr or 0.0
+
         # --- 冷卻（每方向獨立）---
         if clock < self._cooldown_until[direction]:
             self.stats["suppressed_cooldown"] += 1
@@ -1102,17 +1217,24 @@ class OrderflowEngine:
 
         # --- 同方向需有足夠價格推移（避免同價位反覆觸發）---
         last_price = self._last_alert_price.get(direction)
-        if last_price and abs(price - last_price) / last_price * 100.0 < self.min_move_pct:
-            self.stats["suppressed_move"] += 1
-            log.debug(
-                "同方向警報價位僅推移 %.3f%%（< %.2f%%），壓制",
-                abs(price - last_price) / last_price * 100.0,
-                self.min_move_pct,
-            )
-            return None
+        if last_price and atr > 0:
+            moved_pct = abs(price - last_price) / last_price * 100.0
+            moved_atr = abs(price - last_price) / atr
+            if moved_pct < self.min_move_pct and moved_atr < self.min_move_atr_mult:
+                self.stats["suppressed_move"] += 1
+                log.debug(
+                    "同方向自上次警報僅 %.2f%% / %.2f×ATR（需 %.2f%% 或 %.2f×ATR），壓制",
+                    moved_pct,
+                    moved_atr,
+                    self.min_move_pct,
+                    self.min_move_atr_mult,
+                )
+                return None
 
         # --- 多周期評級（ADX / CVD / OI / 資金費率；確定性）---
-        score, grade, reasons = grade_signal(self.context, direction, candidate.kind)
+        score, grade, reasons = grade_signal(
+            self.context, direction, candidate.kind, context_age=context_age
+        )
         if GRADE_RANK.get(grade, 1) < GRADE_RANK.get(self.min_grade, 0):
             self.stats["suppressed_grade"] += 1
             log.debug("評級 %s（%d 分）低於門檻 %s，壓制", grade, score, self.min_grade)
@@ -1140,25 +1262,36 @@ class OrderflowEngine:
             return None
 
         atr = self.atr
+        if atr is None or atr <= 0:
+            return None
+        # --- 4h swing 点位：宽幅回踩挂单区 + 区间外止损 ---
         if direction == "long":
-            entry_low, entry_high = price - 0.25 * atr, price + 0.10 * atr
+            entry_low, entry_high = price - 0.50 * atr, price + 0.15 * atr
             tp1, tp2 = price + self.tp1_mult * atr, price + self.tp2_mult * atr
-            # 止損必須在「進場區間下方」之外，避免止損落在限價區內
-            stop_loss = min(price - self.atr_mult * atr, entry_low - 0.2 * atr)
+            stop_loss = min(price - self.atr_mult * atr, entry_low - 0.35 * atr)
         else:
-            entry_low, entry_high = price - 0.10 * atr, price + 0.25 * atr
+            entry_low, entry_high = price - 0.15 * atr, price + 0.50 * atr
             tp1, tp2 = price - self.tp1_mult * atr, price - self.tp2_mult * atr
-            stop_loss = max(price + self.atr_mult * atr, entry_high + 0.2 * atr)
+            stop_loss = max(price + self.atr_mult * atr, entry_high + 0.35 * atr)
+
         # 目標太近（跟單者喫不到、手續費+滑點就吞掉）→ 等更大波動再發
+        min_tp1_pct = (
+            self.min_tp1_pct_metals if self.base_asset in {"XAU", "XAG"} else self.min_tp1_pct
+        )
         tp1_pct = abs(tp1 - price) / price * 100.0
-        if tp1_pct < self.min_tp1_pct:
+        if tp1_pct < min_tp1_pct:
             self.stats["suppressed_tp"] += 1
             log.debug(
                 "%s TP1 僅 %.2f%%（< %.2f%% 最低要求），等波動放大再發",
                 self.symbol,
                 tp1_pct,
-                self.min_tp1_pct,
+                min_tp1_pct,
             )
+            return None
+        sl_pct = abs(stop_loss - price) / price * 100.0
+        if sl_pct < self.min_sl_pct:
+            self.stats["suppressed_sl"] += 1
+            log.debug("'%s 止損僅 %.2f%%（< %.2f%%），波動太小不發", self.symbol, sl_pct, self.min_sl_pct)
             return None
         signal = OrderflowSignal(
             symbol=self.symbol,
@@ -1187,6 +1320,12 @@ class OrderflowEngine:
         self._cooldown_until[direction] = clock + self.cooldown_sec
         self._last_alert_at = clock
         self._last_alert_price[direction] = price
+        # 發訊後把參考極值更新到成交價（避免同一極值反覆觸發）
+        if self.snapshot is not None:
+            if direction == "long":
+                self.snapshot.high_24h = max(self.snapshot.high_24h, price)
+            else:
+                self.snapshot.low_24h = min(self.snapshot.low_24h, price)
         self.stats["signals"] += 1
         self.stats[f"signal_{candidate.kind}"] = self.stats.get(f"signal_{candidate.kind}", 0) + 1
         return signal
@@ -1216,9 +1355,10 @@ class OrderflowEngine:
         # 注意：本環境的 @ticker / @kline / @miniTicker / @markPrice 全部靜默（BTC 對照亦同），
         # 只有 @trade 與 @bookTicker 有資料 → 24h 高低點與 ATR 必須靠 REST + 磁碟快取
         uri = WS_COMBINED.format(streams=f"{base}@trade")
-        # 先載入磁碟基準（ATR／24h 高低）再載行情：REST 被封鎖時仍可發訊號
+        # 先載入磁碟基準（ATR／24h 高低）再載行情：REST 被封鎖時仍可發訊號；
+        # 用非強制刷新，讓 main.py 排定的錯峰時程（index × 6 秒）生效
         self._load_baseline()
-        await asyncio.to_thread(self.refresh_market_data, True)
+        await asyncio.to_thread(self.refresh_market_data, False)
         async with websockets.connect(
             uri,
             open_timeout=20,
@@ -1238,12 +1378,18 @@ class OrderflowEngine:
                     self._last_msg_at = time.monotonic()
                     if time.monotonic() >= self._next_refresh_at:
                         await asyncio.to_thread(self.refresh_market_data, False)
+                    # 上下文缺失/過舊时排入單飛修復佇列（不在此處直接發請求）
                     if (
-                        self.context is None
-                        and not self.gate.blocked()
+                        not self.gate.blocked()
                         and time.monotonic() >= self._next_context_at
+                        and (
+                            self.context is None
+                            or (datetime.now(timezone.utc) - self.context.fetched_at).total_seconds()
+                            > self.context_max_age_sec
+                        )
                     ):
-                        await asyncio.to_thread(self._refresh_context, True)
+                        CONTEXT_HEALER.request(self)
+                        self._next_context_at = time.monotonic() + 120.0
                     try:
                         message = json.loads(raw)
                     except ValueError:
@@ -1440,9 +1586,9 @@ def _print_snapshot(engine: OrderflowEngine) -> None:
         f"｜關鍵位 ±{engine.proximity_pct:.2f}%"
     )
     print(
-        f"其他訊號   : 動能60s ${engine.momentum_usd:,.0f}"
-        f"｜吸收60s ${engine.absorption_usd:,.0f}"
-        f"｜背離5m ${engine.divergence_usd:,.0f}"
+        f"其他訊號   : 動能5m ${engine.momentum_usd:,.0f}"
+        f"｜吸收5m ${engine.absorption_usd:,.0f}"
+        f"｜背離15m ${engine.divergence_usd:,.0f}"
     )
     print(f"止損示例   : 做多 ${stop_long:,.4f} / 做空 ${stop_short:,.4f}（{engine.atr_mult:g}×ATR）")
     print("─" * 64)
@@ -1453,7 +1599,7 @@ def _print_snapshot_table(engines: list[OrderflowEngine]) -> None:
     print("─" * 100)
     print(
         f"{'標的':<12}{'現價':>14}{'24h 低–高':>28}{'ATR':>10}"
-        f"{'單筆門檻':>14}{'15s 窗口':>14}{'距高/低':>16}"
+        f"{'單筆門檻':>14}{'60s 窗口':>14}{'距高/低':>16}"
     )
     for engine in engines:
         snapshot = engine.snapshot

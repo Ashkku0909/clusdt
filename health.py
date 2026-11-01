@@ -31,7 +31,7 @@ def _check_telegram(cfg: Config) -> str:
 
 
 def _check_binance(cfg: Config) -> str:
-    """Binance USDT-M：逐一確認 BINANCE_SYMBOLS 的 24h ticker 與 15m ATR。"""
+    """Binance USDT-M：逐一確認 BINANCE_SYMBOLS 的 24h ticker 與 ATR。"""
     session = requests.Session()
     ok: list[str] = []
     failed: list[str] = []
@@ -133,7 +133,7 @@ def run_health(cfg: Config) -> int:
     )
     if cfg.orderflow_auto_calibrate:
         threshold_text = (
-            f"自動校準（{cfg.orderflow_calibration_factor:g}×15s 均流，"
+            f"自動校準（{cfg.orderflow_calibration_factor:g}×60s 均流，"
             f"地板 ${cfg.orderflow_min_window_usd:,.0f}／天花板 ${cfg.orderflow_max_window_usd:,.0f}）"
         )
     else:

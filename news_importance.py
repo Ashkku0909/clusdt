@@ -151,11 +151,23 @@ def _extract_json(text: str) -> dict | None:
             return None
 
 
-def score_news(cfg, title: str, body: str) -> NewsVerdict | None:
-    """呼叫 DeepSeek Flash 對一則新聞評分；任何失敗皆回傳 None（fail-open）。"""
+def score_news(cfg, title: str, body: str, recent_headlines: list[str] | None = None) -> NewsVerdict | None:
+    """呼叫 DeepSeek Flash 對一則新聞評分；任何失敗皆回傳 None（fail-open）。
+
+    recent_headlines：近期已推播的標題。同一事件的重複報導（例如直播部落格
+    多個 URL 寫同一件事）會被要求評分 <= 4，避免同故事洗版。
+    """
     if not getattr(cfg, "deepseek_api_key", ""):
         return None
     user_prompt = f"Title: {title}\n\nBody: {(body or '')[:1500]}"
+    if recent_headlines:
+        recent = "\n".join(f"- {line[:160]}" for line in recent_headlines[-10:])
+        user_prompt += (
+            "\n\nRecent headlines already pushed (same breaking event):\n"
+            f"{recent}\n"
+            "If this article covers the exact same event already reported above without major new facts, "
+            "score it <= 4."
+        )
     try:
         data = None
         for max_tokens in (800, 1600):

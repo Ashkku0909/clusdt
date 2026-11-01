@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -245,13 +246,29 @@ MARKET_TITLES = {
 
 
 def _reference_price() -> float | None:
-    """從訂單流引擎的 WebSocket 快取取 CLUSDT 現價（零 I/O；取不到就略過）。"""
+    """CLUSDT 現價：優先用訂單流 WS 快取，其次磁碟 baseline 與倉庫種子檔（零 I/O）。"""
     try:
-        from binance_orderflow import LATEST_PRICES
+        from binance_orderflow import LATEST_PRICES, BASELINE_DIR, BASELINE_SEED_PATH
     except Exception:  # noqa: BLE001 - 循環匯入或模組未載入
         return None
     price = LATEST_PRICES.get("CLUSDT")
-    return price if price and price > 0 else None
+    if price and price > 0:
+        return price
+    for path, is_seed in ((BASELINE_DIR / "CLUSDT.json", False), (BASELINE_SEED_PATH, True)):
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        payload = raw.get("CLUSDT") if is_seed else raw
+        if not isinstance(payload, dict):
+            continue
+        try:
+            snapshot_price = float(payload["snapshot"]["last_price"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if snapshot_price > 0:
+            return snapshot_price
+    return None
 
 
 def format_cftc_alert(position: CftcPosition) -> str:
@@ -322,6 +339,12 @@ def format_cftc_alert(position: CftcPosition) -> str:
     return "\n".join(lines)
 
 
+def _in_release_window(now: datetime) -> bool:
+    """CFTC 發布窗口：週五 19:00 UTC → 週六 06:00 UTC（報告於 15:30 ET 發布，留宽余量）。"""
+    weekday = now.weekday()  # 0=Mon … 4=Fri … 5=Sat
+    return (weekday == 4 and now.hour >= 19) or (weekday == 5 and now.hour < 6)
+
+
 def run_cftc_cycle(cfg, dispatcher, state, dry_run: bool = False, force: bool = False) -> int:
     """檢查 CFTC 週報（僅 NYMEX WTI，067651）；新報告才推播。"""
     # 先看節流再打 API：舊版先抓資料再寫時戳，導致 last_check 永遠等於「現在」而一律略過
@@ -344,12 +367,29 @@ def run_cftc_cycle(cfg, dispatcher, state, dry_run: bool = False, force: bool = 
     if not dry_run:
         state.update_flags({CFTC_CHECK_FLAG: str(time.time())})
 
-    is_new = str(flags.get(CFTC_FLAG, "")) != position.report_date
+    already_sent = str(flags.get(CFTC_FLAG, ""))
+    is_new = already_sent != position.report_date
     change = position.mm_net_change
 
     if not force:
         if not is_new:
-            log.info("CFTC：已處理（報告日 %s）", position.report_date)
+            log.info("CFTC：已推播過此報告日 %s，不重複", position.report_date)
+            return 0
+        # Render 重啟時 state 是空的：不要每次重啟都把上週二的舊報告再發一遍。
+        # 只有「剛發布 36 小時內」或「處於發布窗口」才自動補發，其餘需 --cftc --force。
+        now = datetime.now(timezone.utc)
+        report_day = _parse_date(position.report_date)
+        release_age_hours = 999.0
+        if report_day is not None:
+            release_at = datetime.combine(report_day + timedelta(days=3), datetime.min.time(), tzinfo=timezone.utc)
+            release_at = release_at.replace(hour=19, minute=30)
+            release_age_hours = (now - release_at).total_seconds() / 3600.0
+        if not already_sent and release_age_hours > 36 and not _in_release_window(now):
+            log.info(
+                "CFTC：新啟動且非發布窗口（報告日 %s 已發布 %.0f 小時），暫不補發；用 --cftc --force 可手動推送",
+                position.report_date,
+                release_age_hours,
+            )
             return 0
         if cfg.cftc_flow_threshold > 0 and (change is None or abs(change) < cfg.cftc_flow_threshold):
             log.info(
