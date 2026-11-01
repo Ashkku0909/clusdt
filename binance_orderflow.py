@@ -64,7 +64,7 @@ import re
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Deque, Iterable
@@ -74,12 +74,14 @@ import websockets
 
 from market_context import (
     GRADE_RANK,
+    FrameContext,
     MarketContext,
     context_line,
     fetch_market_context,
     grade_signal,
     load_context_cache,
     save_context_cache,
+    trend_zh,
 )
 
 log = logging.getLogger(__name__)
@@ -100,6 +102,7 @@ BASELINE_MAX_AGE_SEC = 12 * 3600.0
 SNAPSHOT_CACHE_MAX_AGE_SEC = 6 * 3600.0
 # 部署到新機器（/tmp 重設）時，若沒有任何快取就用倉庫內的種子檔（由 --dump-baseline 產生）
 BASELINE_SEED_PATH = Path(__file__).resolve().parent / "baseline_seed.json"
+CONTEXT_SEED_PATH = Path(__file__).resolve().parent / "context_seed.json"
 
 DIRECTION_LABELS = {"long": "做多 🟢", "short": "做空 🔴"}
 
@@ -238,7 +241,12 @@ class OrderflowSignal:
     entry_high: float = 0.0
     tp1: float = 0.0
     tp2: float = 0.0
+    tp3: float = 0.0
+    flow_share: float = 0.0
+    flow_window: str = ""
     context_text: str = ""
+    context_frames: dict = field(default_factory=dict)
+    cvd_aligned: bool = True
 
 
 @dataclass(slots=True, frozen=True)
@@ -254,6 +262,8 @@ class SignalCandidate:
     level_kind: str
     level_price: float
     level_text: str
+    flow_share: float = 0.0
+    flow_window: str = ""
 
 
 class FlowWindow:
@@ -427,39 +437,69 @@ def _fmt_price(value: float) -> str:
     return f"{value:,.5f}"
 
 
+GRADE_BADGES = ((88, "🏆 A+ 機構級"), (82, "⭐ A 級精選"), (70, "🔹 B 級標準"))
+
+
+def _grade_badge(score: int) -> str:
+    for threshold, label in GRADE_BADGES:
+        if score >= threshold:
+            return label
+    return "🔹 C 級觀察"
+
+
+def _cvd_aligned(context: MarketContext | None, direction: str) -> bool:
+    """即時 1h CVD 是否與訊號方向一致（用於卡片「週期共振」一行）。"""
+    if context is None:
+        return True
+    frame = context.frame("1h")
+    if frame is None or frame.cvd_usd == 0:
+        return True
+    return frame.cvd_usd > 0 if direction == "long" else frame.cvd_usd < 0
+
+
 def format_orderflow_alert(signal: OrderflowSignal) -> str:
-    """依既定模板輸出警報（純文字，Telegram 端僅做 Markdown→HTML 轉義）。"""
+    """機構交易台風格卡片（繁體中文、純文字，Telegram 端做 Markdown→HTML）。"""
     entry = signal.entry_price
     long_side = signal.direction == "long"
 
     def _pct(target: float) -> str:
-        change = (target - entry) / entry * 100.0
-        return f"{change:+.2f}%"
+        return f"{(target - entry) / entry * 100.0:+.2f}%"
 
-    risk = abs(entry - signal.stop_loss) / entry * 100.0
-    reward1 = abs(signal.tp1 - entry) / entry * 100.0
-    reward2 = abs(signal.tp2 - entry) / entry * 100.0
-    rr = f"1:{reward1 / risk:.1f}｜1:{reward2 / risk:.1f}" if risk > 0 else "—"
+    risk = abs(entry - signal.stop_loss)
+    reward1 = abs(signal.tp1 - entry)
+    reward2 = abs(signal.tp2 - entry)
+    reward3 = abs(signal.tp3 - entry)
+    r1 = reward1 / risk if risk > 0 else 0.0
+    r2 = reward2 / risk if risk > 0 else 0.0
+    r3 = reward3 / risk if risk > 0 else 0.0
+    flow_side = "買盤" if long_side else "賣盤"
+    share_txt = f"（佔比 {signal.flow_share * 100:.0f}%）" if signal.flow_share > 0 else ""
+    window = signal.flow_window or "近期"
+    direction_zh = "多頭" if long_side else "空頭"
+    structure = signal.level_text or signal.nature
     lines = [
-        f"{DIRECTION_LIGHTS[signal.direction]} 【{symbol_label(signal.symbol)} {KIND_LABELS.get(signal.kind, KIND_LABELS['sweep'])}】",
+        f"{_grade_badge(signal.score)}｜{DIRECTION_LIGHTS[signal.direction]} "
+        f"{symbol_label(signal.symbol)} {KIND_LABELS.get(signal.kind, KIND_LABELS['sweep'])}",
         "━━━━━━━━━━━━━━━━━━",
-        f"方向：{DIRECTION_LABELS[signal.direction]}",
-        f"進場位：${_fmt_price(entry)}",
-        f"進場區間：${_fmt_price(signal.entry_low)} – ${_fmt_price(signal.entry_high)}（限價）",
-        "執行：60 分鐘內未成交、或價格已超出區間 0.6×ATR 則放棄本單",
-        f"止損位：${_fmt_price(signal.stop_loss)}（{_pct(signal.stop_loss)}｜ATR {signal.atr_mult:g}x）",
-        f"止盈：TP1 ${_fmt_price(signal.tp1)}（{_pct(signal.tp1)}）"
-        f"｜TP2 ${_fmt_price(signal.tp2)}（{_pct(signal.tp2)}）",
-        f"盈虧比：{rr}",
-        f"評級：{'—（技術面暫不可用，純量價）' if signal.grade == '—' else f'{signal.grade}（{signal.score} 分）'}",
-        f"性質：{signal.nature}",
-        f"大單金額：${signal.notional:,.0f}",
-        f"成交量：{signal.qty:,.2f} 手",
-        f"關鍵位置：{signal.level_text}",
+        f"💵 現價 ${_fmt_price(entry)}",
+        f"🎯 進場 ${_fmt_price(signal.entry_low)} – ${_fmt_price(signal.entry_high)}（限價）",
+        f"🛑 止損 ${_fmt_price(signal.stop_loss)}"
+        f"（{_pct(signal.stop_loss)}｜{signal.atr_mult:g}×ATR）",
+        f"🥇 TP1 ${_fmt_price(signal.tp1)}（{_pct(signal.tp1)}｜{r1:.2f}R）"
+        f" → 減 50%、止損移保本",
+        f"🥈 TP2 ${_fmt_price(signal.tp2)}（{_pct(signal.tp2)}｜{r2:.2f}R）→ 減 30%",
+        f"🥉 TP3 ${_fmt_price(signal.tp3)}（{_pct(signal.tp3)}｜{r3:.2f}R）→ 留 20% 追趨勢",
+        "📊 微觀結構與主力依據：",
+        f"• 主力資金：{window}內主動{flow_side}淨流入 ${signal.notional / 1e6:,.2f}M{share_txt}",
+        f"• 關鍵結構：{structure}",
+        (
+            f"• 週期共振：1D {trend_zh(signal.context_frames.get('1d'))} ▸ "
+            f"4H {trend_zh(signal.context_frames.get('4h'))} ▸ "
+            f"即時資金流{'同向' if signal.cvd_aligned else '反向'}（評分 {signal.score}/100）"
+        ),
+        "⏱ 執行紀律：60 分鐘內未進場、或未成交前已觸及 TP1 則取消掛單",
+        "━━━━━━━━━━━━━━━━━━",
     ]
-    if signal.context_text:
-        lines.append(f"依據：{signal.context_text}")
-    lines.append("━━━━━━━━━━━━━━━━━━")
     return "\n".join(lines)
 
 
@@ -475,6 +515,7 @@ class RestGate:
     def __init__(self, default_ban_sec: float = 600.0) -> None:
         self._lock = threading.Lock()
         self._blocked_until = 0.0
+        self._last_ban_at = 0.0
         self.default_ban_sec = default_ban_sec
 
     def blocked(self) -> bool:
@@ -488,6 +529,12 @@ class RestGate:
     def block_for(self, seconds: float) -> None:
         with self._lock:
             self._blocked_until = max(self._blocked_until, time.monotonic() + max(60.0, float(seconds)))
+            self._last_ban_at = time.monotonic()
+
+    def recent_ban(self, within_sec: float = 7200.0) -> bool:
+        """過去 N 秒內是否曾被封鎖（用於放寬上下文容忍度）。"""
+        with self._lock:
+            return self._last_ban_at > 0 and (time.monotonic() - self._last_ban_at) <= within_sec
 
 
 def parse_ban_seconds(exc: Exception, default: float = 600.0) -> float | None:
@@ -613,11 +660,23 @@ class OrderflowEngine:
         self.proximity_pct = float(cfg.orderflow_sr_proximity_pct)
         self.atr_period = int(cfg.orderflow_atr_period)
         self.atr_mult = float(cfg.orderflow_atr_mult)
-        self.tp1_mult = float(getattr(cfg, "orderflow_tp1_atr_mult", 3.6))
-        self.tp2_mult = float(getattr(cfg, "orderflow_tp2_atr_mult", 6.0))
-        self.min_tp1_pct = float(getattr(cfg, "orderflow_min_tp1_pct", 2.5))
-        self.min_tp1_pct_metals = float(getattr(cfg, "orderflow_min_tp1_pct_metals", 1.8))
-        self.min_sl_pct = float(getattr(cfg, "orderflow_min_sl_pct", 1.0))
+        self.tp1_mult = float(getattr(cfg, "orderflow_tp1_atr_mult", 1.2))
+        self.tp2_mult = float(getattr(cfg, "orderflow_tp2_atr_mult", 2.4))
+        self.tp3_mult = float(getattr(cfg, "orderflow_tp3_atr_mult", 4.0))
+        self.flow_meta_ttl = float(getattr(cfg, "orderflow_flow_meta_ttl_sec", 3600))
+        self._next_flow_meta_at = 0.0
+        # 資產類別最低 TP1 / SL 距離（%）：金屬 / 主流與股票 / 高波動山寨
+        asset_class = self._asset_class()
+        self.asset_class = asset_class
+        if asset_class == "metals":
+            self.min_tp1_pct = float(getattr(cfg, "orderflow_min_tp1_pct_metals", 0.55))
+            self.min_sl_pct = float(getattr(cfg, "orderflow_min_sl_pct_metals", 0.65))
+        elif asset_class == "alts":
+            self.min_tp1_pct = float(getattr(cfg, "orderflow_min_tp1_pct_alts", 1.20))
+            self.min_sl_pct = float(getattr(cfg, "orderflow_min_sl_pct_alts", 1.40))
+        else:
+            self.min_tp1_pct = float(getattr(cfg, "orderflow_min_tp1_pct_majors", 0.85))
+            self.min_sl_pct = float(getattr(cfg, "orderflow_min_sl_pct_majors", 1.00))
         self.min_move_atr_mult = float(getattr(cfg, "orderflow_min_move_atr_mult", 1.5))
         self.breakout_cushion_atr = float(getattr(cfg, "orderflow_breakout_cushion_atr", 0.8))
         self.require_context = bool(getattr(cfg, "orderflow_require_context", True))
@@ -674,6 +733,8 @@ class OrderflowEngine:
         self._cooldown_until: dict[str, float] = {"long": 0.0, "short": 0.0}
         self._last_alert_at = -1.0e9  # 全域最小間隔用：最後一次「已發送」時間
         self._last_alert_price: dict[str, float] = {}  # 各方向最後一筆已發送價位
+        # WS 秒級成交流 → 60 根 1 分鐘 K（零 REST 的即時 1h CVD / 趨勢）
+        self._minute_bars: Deque[dict] = deque(maxlen=61)
 
         self.stats: dict[str, float] = {
             "trades": 0,
@@ -704,6 +765,16 @@ class OrderflowEngine:
     # ------------------------------------------------------------------ #
     # 市場資料（阻塞；請以 to_thread 呼叫）
     # ------------------------------------------------------------------ #
+    METAL_SYMBOLS = {"XAUUSDT", "XAGUSDT"}
+    ALT_SYMBOLS = {"CLUSDT", "SOLUSDT", "XRPUSDT", "LINKUSDT", "ENAUSDT"}
+
+    def _asset_class(self) -> str:
+        if self.symbol in self.METAL_SYMBOLS:
+            return "metals"
+        if self.symbol in self.ALT_SYMBOLS:
+            return "alts"
+        return "majors"
+
     def _baseline_path(self) -> Path:
         return BASELINE_DIR / f"{self.symbol}.json"
 
@@ -904,7 +975,10 @@ class OrderflowEngine:
         if not force and now < self._next_context_at:
             return
         try:
-            context = fetch_market_context(self.session, self.symbol)
+            include_flow = time.monotonic() >= self._next_flow_meta_at and not self.gate.blocked()
+            context = fetch_market_context(self.session, self.symbol, include_flow=include_flow)
+            if include_flow:
+                self._next_flow_meta_at = time.monotonic() + self.flow_meta_ttl
         except Exception as exc:  # noqa: BLE001 - 上下文失敗不阻塞交易
             ban = parse_ban_seconds(exc, self.gate.default_ban_sec)
             if ban is not None:
@@ -920,16 +994,151 @@ class OrderflowEngine:
         self._next_context_at = time.monotonic() + self.ta_refresh_sec
         save_context_cache(context)
 
+    def _seed_context(self) -> MarketContext | None:
+        """從倉庫內的上下文種子（context_seed / baseline_seed）重建 4h/1d 宏觀。"""
+        block: dict | None = None
+        for path, is_map in ((CONTEXT_SEED_PATH, True), (BASELINE_SEED_PATH, True)):
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            candidate = raw.get(self.symbol) if is_map else raw
+            if isinstance(candidate, dict) and isinstance(candidate.get("context"), dict):
+                block = candidate["context"]
+            elif isinstance(candidate, dict) and isinstance(candidate.get("frames"), dict):
+                block = candidate
+            if block:
+                break
+        if not block:
+            return None
+        try:
+            fetched = datetime.fromisoformat(str(block["fetched_at"]))
+            if fetched.tzinfo is None:
+                fetched = fetched.replace(tzinfo=timezone.utc)
+            frames = {
+                interval: FrameContext(
+                    interval=row["interval"],
+                    adx=float(row["adx"]),
+                    plus_di=float(row["plus_di"]),
+                    minus_di=float(row["minus_di"]),
+                    atr=float(row["atr"]),
+                    cvd_usd=float(row["cvd_usd"]),
+                    price_change_pct=float(row["price_change_pct"]),
+                    trend=str(row["trend"]),
+                )
+                for interval, row in block["frames"].items()
+            }
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not frames:
+            return None
+        return MarketContext(
+            symbol=self.symbol,
+            price=float(block.get("price") or 0.0),
+            funding_rate=float(block.get("funding_rate") or 0.0),
+            oi_now_usd=float(block.get("oi_now_usd") or 0.0),
+            oi_change_15m_pct=float(block.get("oi_change_15m_pct") or 0.0),
+            oi_change_1h_pct=float(block.get("oi_change_1h_pct") or 0.0),
+            oi_matrix=str(block.get("oi_matrix") or "neutral"),
+            oi_matrix_label=str(block.get("oi_matrix_label") or "持倉中性"),
+            frames=frames,
+            fetched_at=fetched,
+        )
+
     def _restore_cached_context(self) -> None:
-        """限流／重啟時沿用上次成功的上下文（最多 6 小時），至少保留評級能力。"""
+        """限流／重啟時沿用上次成功的上下文（磁碟快取 6h，或倉庫種子檔）。"""
         if self.context is not None:
             return
         cached = load_context_cache(self.symbol)
+        if cached is None:
+            cached = self._seed_context()
         if cached is None:
             return
         self.context = cached
         age_min = (datetime.now(timezone.utc) - cached.fetched_at).total_seconds() / 60.0
         log.info("%s 沿用磁碟快取上下文（%.0f 分鐘前，限流期間暫代）", self.symbol, age_min)
+
+    # ------------------------------------------------------------------ #
+    # WS 原生微觀結構（零 REST：60 根 1 分鐘 K → 即時 1h CVD / 趨勢）
+    # ------------------------------------------------------------------ #
+    def _update_minute_bar(self, event: TradeEvent) -> None:
+        minute = event.trade_time_ms // 60_000
+        bar = self._minute_bars[-1] if self._minute_bars else None
+        if bar is None or bar["minute"] != minute:
+            bar = {
+                "minute": minute,
+                "open": event.price,
+                "high": event.price,
+                "low": event.price,
+                "close": event.price,
+                "buy": 0.0,
+                "sell": 0.0,
+            }
+            self._minute_bars.append(bar)
+        else:
+            bar["high"] = max(bar["high"], event.price)
+            bar["low"] = min(bar["low"], event.price)
+            bar["close"] = event.price
+        if event.taker_buy:
+            bar["buy"] += event.notional
+        else:
+            bar["sell"] += event.notional
+
+    def _live_1h_frame(self) -> FrameContext | None:
+        """由 WS 分鐘 K 合成即時 1h 帧（CVD 與趨勢完全不需 REST）。"""
+        bars = list(self._minute_bars)
+        if len(bars) < 10:
+            return None
+        cvd = sum(bar["buy"] - bar["sell"] for bar in bars)
+        first_open = bars[0]["open"]
+        last_close = bars[-1]["close"]
+        move = (last_close - first_open) / first_open * 100.0 if first_open else 0.0
+        trend = "up" if move >= 0.15 else ("down" if move <= -0.15 else "range")
+        true_ranges = []
+        for index in range(1, len(bars)):
+            prev_close = bars[index - 1]["close"]
+            true_ranges.append(
+                max(
+                    bars[index]["high"] - bars[index]["low"],
+                    abs(bars[index]["high"] - prev_close),
+                    abs(bars[index]["low"] - prev_close),
+                )
+            )
+        atr_live = sum(true_ranges) / len(true_ranges) if true_ranges else (self.atr or 0.0)
+        return FrameContext(
+            interval="1h(ws)",
+            adx=22.0,  # 樣本太短不宣稱 ADX，取中性值避免誤加/扣分
+            plus_di=25.0,
+            minus_di=25.0,
+            atr=atr_live,
+            cvd_usd=cvd,
+            price_change_pct=move,
+            trend=trend,
+        )
+
+    def _context_allowed_age(self) -> float:
+        """限流期間放寬宏觀（4h/1d）容忍度到 6 小時；否則 45 分鐘。"""
+        if not self.require_context:
+            return float("inf")
+        if self.gate.blocked() or self.gate.recent_ban(7200.0):
+            return max(self.context_max_age_sec, 21600.0)
+        return self.context_max_age_sec
+
+    def _effective_context(self) -> tuple[MarketContext | None, float | None]:
+        """回傳（宏觀 4h/1d + 即時 WS 1h 的合成上下文, 宏觀資料年齡秒）。"""
+        context = self.context
+        if context is None:
+            self._restore_cached_context()
+            context = self.context
+        if context is None:
+            return None, None
+        age = (datetime.now(timezone.utc) - context.fetched_at).total_seconds()
+        live = self._live_1h_frame()
+        if live is not None:
+            frames = dict(context.frames)
+            frames["1h"] = live
+            context = replace(context, frames=frames)
+        return context, age
 
     # ------------------------------------------------------------------ #
     # 純邏輯：逐筆成交 → 訊號判斷（可離線單元測試）
@@ -954,6 +1163,7 @@ class OrderflowEngine:
         self.win_sweep.add(event)
         self.win_momentum.add(event)
         self.win_div.add(event)
+        self._update_minute_bar(event)
         self.stats["max_buy_flow"] = max(self.stats["max_buy_flow"], self.win_sweep.buy)
         self.stats["max_sell_flow"] = max(self.stats["max_sell_flow"], self.win_sweep.sell)
 
@@ -1038,43 +1248,73 @@ class OrderflowEngine:
                             level_kind=level_kind,
                             level_price=level_price,
                             level_text=_level_text(level_kind, direction, level_price, price),
+                            flow_share=(
+                                max(self.win_momentum.buy, self.win_momentum.sell)
+                                / self.win_momentum.total
+                                if self.win_momentum.total > 0
+                                else 0.0
+                            ),
+                            flow_window="過去 5 分鐘",
                         )
                     )
 
-        # 2) 量價背離：15 分鐘累計 delta 與價格方向相反
+        # 2) 量價背離：15 分鐘累計 delta 與價格方向相反（僅限 24h 極值附近）
         if self.enable_divergence:
             first_900 = self.win_div.first_price()
             delta_900 = self.win_div.delta
+            near_high_zone = dist_high <= 0.6 or (
+                high > 0 and (high - price) <= 0.5 * (self.atr or 0.0)
+            )
+            near_low_zone = dist_low <= 0.6 or (
+                low > 0 and (price - low) <= 0.5 * (self.atr or 0.0)
+            )
+            div_share = (
+                max(self.win_div.buy, self.win_div.sell) / self.win_div.total
+                if self.win_div.total > 0
+                else 0.0
+            )
             if first_900 and abs(delta_900) >= self.divergence_usd:
                 move_900 = (price - first_900) / first_900 * 100.0
                 if delta_900 <= -self.divergence_usd and move_900 >= self.divergence_price_pct:
-                    candidates.append(
-                        SignalCandidate(
-                            kind="divergence",
-                            direction="short",
-                            nature="量價背離（價漲量賣、疑似派發）",
-                            notional=abs(delta_900),
-                            qty=self.win_div.sell_qty,
-                            trigger="divergence",
-                            level_kind="high",
-                            level_price=high,
-                            level_text=f"24h 高位區 ${high:,.2f}（距 {dist_high:.2f}%）",
+                    if not near_high_zone:
+                        self.stats["suppressed_sr"] += 1
+                        log.debug("%s 背離做空但不在 24h 高點區，忽略", self.symbol)
+                    else:
+                        candidates.append(
+                            SignalCandidate(
+                                kind="divergence",
+                                direction="short",
+                                nature="量價背離（價漲量賣、疑似派發）",
+                                notional=abs(delta_900),
+                                qty=self.win_div.sell_qty,
+                                trigger="divergence",
+                                level_kind="high",
+                                level_price=high,
+                                level_text=f"24h 高位區 ${high:,.2f}（距 {dist_high:.2f}%）",
+                                flow_share=div_share,
+                                flow_window="過去 15 分鐘",
+                            )
                         )
-                    )
                 elif delta_900 >= self.divergence_usd and move_900 <= -self.divergence_price_pct:
-                    candidates.append(
-                        SignalCandidate(
-                            kind="divergence",
-                            direction="long",
-                            nature="量價背離（價跌量買、疑似吸籌）",
-                            notional=abs(delta_900),
-                            qty=self.win_div.buy_qty,
-                            trigger="divergence",
-                            level_kind="low",
-                            level_price=low,
-                            level_text=f"24h 低位區 ${low:,.2f}（距 {dist_low:.2f}%）",
+                    if not near_low_zone:
+                        self.stats["suppressed_sr"] += 1
+                        log.debug("%s 背離做多但不在 24h 低點區，忽略", self.symbol)
+                    else:
+                        candidates.append(
+                            SignalCandidate(
+                                kind="divergence",
+                                direction="long",
+                                nature="量價背離（價跌量買、疑似吸籌）",
+                                notional=abs(delta_900),
+                                qty=self.win_div.buy_qty,
+                                trigger="divergence",
+                                level_kind="low",
+                                level_price=low,
+                                level_text=f"24h 低位區 ${low:,.2f}（距 {dist_low:.2f}%）",
+                                flow_share=div_share,
+                                flow_window="過去 15 分鐘",
+                            )
                         )
-                    )
 
         # 3) 動能突破：5 分鐘主動方向高度集中且價格創 24h 新高／新低
         if self.enable_momentum and self.win_momentum.total > 0:
@@ -1097,6 +1337,8 @@ class OrderflowEngine:
                             level_kind="high",
                             level_price=high,
                             level_text=f"突破 24h 高點 ${high:,.2f}（新高效應）",
+                            flow_share=buy_share,
+                            flow_window="過去 5 分鐘",
                         )
                     )
             elif -delta_300 >= self.momentum_usd and (1.0 - buy_share) >= self.momentum_share and price <= low:
@@ -1115,6 +1357,8 @@ class OrderflowEngine:
                             level_kind="low",
                             level_price=low,
                             level_text=f"跌破 24h 低點 ${low:,.2f}（新低效應）",
+                            flow_share=1.0 - buy_share,
+                            flow_window="過去 5 分鐘",
                         )
                     )
 
@@ -1161,6 +1405,10 @@ class OrderflowEngine:
                 level_kind=level_kind,
                 level_price=level_price,
                 level_text=_level_text(level_kind, direction, level_price, price),
+                flow_share=(
+                    window_flow / self.win_sweep.total if window_hit and self.win_sweep.total > 0 else 1.0
+                ),
+                flow_window="過去 60 秒",
             )
         )
         return candidates
@@ -1182,12 +1430,9 @@ class OrderflowEngine:
             return None
 
         # --- 必須有可用技術面（絕不發「評級：—」）---
-        if self.context is None:
-            self._restore_cached_context()
-        context_age = None
-        if self.context is not None:
-            context_age = (datetime.now(timezone.utc) - self.context.fetched_at).total_seconds()
-        if self.require_context and (context_age is None or context_age > self.context_max_age_sec):
+        context, context_age = self._effective_context()
+        allowed_age = self._context_allowed_age()
+        if self.require_context and (context is None or context_age is None or context_age > allowed_age):
             self.stats["suppressed_context"] += 1
             CONTEXT_HEALER.request(self)
             log.debug(
@@ -1196,6 +1441,7 @@ class OrderflowEngine:
                 "缺失" if context_age is None else f"已 {context_age / 60.0:.0f} 分鐘未更新",
             )
             return None
+        self.context = context
 
         atr = self.atr or 0.0
 
@@ -1264,35 +1510,28 @@ class OrderflowEngine:
         atr = self.atr
         if atr is None or atr <= 0:
             return None
-        # --- 4h swing 点位：宽幅回踩挂单区 + 区间外止损 ---
-        if direction == "long":
-            entry_low, entry_high = price - 0.50 * atr, price + 0.15 * atr
-            tp1, tp2 = price + self.tp1_mult * atr, price + self.tp2_mult * atr
-            stop_loss = min(price - self.atr_mult * atr, entry_low - 0.35 * atr)
+        # --- 進場區依訊號類型：動能突破較窄，吸納/掃單給回踩空間
+        if candidate.kind == "momentum":
+            zone_below, zone_above = 0.25, 0.12
         else:
-            entry_low, entry_high = price - 0.15 * atr, price + 0.50 * atr
-            tp1, tp2 = price - self.tp1_mult * atr, price - self.tp2_mult * atr
-            stop_loss = max(price + self.atr_mult * atr, entry_high + 0.35 * atr)
-
-        # 目標太近（跟單者喫不到、手續費+滑點就吞掉）→ 等更大波動再發
-        min_tp1_pct = (
-            self.min_tp1_pct_metals if self.base_asset in {"XAU", "XAG"} else self.min_tp1_pct
-        )
-        tp1_pct = abs(tp1 - price) / price * 100.0
-        if tp1_pct < min_tp1_pct:
+            zone_below, zone_above = 0.35, 0.10
+        # --- 距離下限：低波動標的用資產類別地板放寬目標，而不是靜音
+        stop_dist = max(self.atr_mult * atr, self.min_sl_pct / 100.0 * price)
+        tp1_dist = max(self.tp1_mult * atr, self.min_tp1_pct / 100.0 * price)
+        tp2_dist = max(self.tp2_mult * atr, tp1_dist * 2.0)
+        tp3_dist = max(self.tp3_mult * atr, tp1_dist * (self.tp3_mult / max(self.tp1_mult, 0.1)))
+        if tp1_dist / price * 100.0 > 8.0:
             self.stats["suppressed_tp"] += 1
-            log.debug(
-                "%s TP1 僅 %.2f%%（< %.2f%% 最低要求），等波動放大再發",
-                self.symbol,
-                tp1_pct,
-                min_tp1_pct,
-            )
+            log.debug("%s 目標距離異常（%.1f%%），丟棄", self.symbol, tp1_dist / price * 100.0)
             return None
-        sl_pct = abs(stop_loss - price) / price * 100.0
-        if sl_pct < self.min_sl_pct:
-            self.stats["suppressed_sl"] += 1
-            log.debug("'%s 止損僅 %.2f%%（< %.2f%%），波動太小不發", self.symbol, sl_pct, self.min_sl_pct)
-            return None
+        if direction == "long":
+            entry_low, entry_high = price - zone_below * atr, price + zone_above * atr
+            stop_loss = min(price - stop_dist, entry_low - 0.30 * atr)
+            tp1, tp2, tp3 = price + tp1_dist, price + tp2_dist, price + tp3_dist
+        else:
+            entry_low, entry_high = price - zone_above * atr, price + zone_below * atr
+            stop_loss = max(price + stop_dist, entry_high + 0.30 * atr)
+            tp1, tp2, tp3 = price - tp1_dist, price - tp2_dist, price - tp3_dist
         signal = OrderflowSignal(
             symbol=self.symbol,
             direction=direction,
@@ -1315,7 +1554,12 @@ class OrderflowEngine:
             entry_high=entry_high,
             tp1=tp1,
             tp2=tp2,
+            tp3=tp3,
+            flow_share=candidate.flow_share,
+            flow_window=candidate.flow_window,
             context_text=context_line(self.context, reasons),
+            context_frames=dict(self.context.frames) if self.context is not None else {},
+            cvd_aligned=_cvd_aligned(self.context, direction),
         )
         self._cooldown_until[direction] = clock + self.cooldown_sec
         self._last_alert_at = clock
@@ -1532,6 +1776,7 @@ def dump_baseline_seed(cfg) -> int:
                 session, code, cfg.orderflow_kline_interval, cfg.orderflow_atr_period + 48
             )
             atr = compute_atr(rows, cfg.orderflow_atr_period)
+            context = fetch_market_context(session, code, include_flow=True)
         except Exception as exc:  # noqa: BLE001 - 單一標的失敗不影響其他
             print(f"✗ {code}: {exc}")
             continue
@@ -1548,11 +1793,45 @@ def dump_baseline_seed(cfg) -> int:
                 "trade_count_24h": snapshot.trade_count_24h,
                 "fetched_at": snapshot.fetched_at.isoformat(),
             },
+            # 4h/1d 宏觀結構種子：新部署即使正在 418，也能立即有週期共振可用
+            "context": {
+                "fetched_at": context.fetched_at.isoformat(),
+                "oi_matrix": context.oi_matrix,
+                "oi_matrix_label": context.oi_matrix_label,
+                "oi_change_15m_pct": context.oi_change_15m_pct,
+                "oi_change_1h_pct": context.oi_change_1h_pct,
+                "funding_rate": context.funding_rate,
+                "oi_now_usd": context.oi_now_usd,
+                "frames": {
+                    interval: {
+                        "interval": frame.interval,
+                        "adx": frame.adx,
+                        "plus_di": frame.plus_di,
+                        "minus_di": frame.minus_di,
+                        "atr": frame.atr,
+                        "cvd_usd": frame.cvd_usd,
+                        "price_change_pct": frame.price_change_pct,
+                        "trend": frame.trend,
+                    }
+                    for interval, frame in context.frames.items()
+                },
+            },
         }
-        print(f"✓ {code:<10} ${snapshot.last_price:,.4f}｜24h {snapshot.low_24h:,.4f}–{snapshot.high_24h:,.4f}｜ATR {atr:,.4f}")
+        print(
+            f"✓ {code:<10} ${snapshot.last_price:,.4f}｜24h {snapshot.low_24h:,.4f}–{snapshot.high_24h:,.4f}"
+            f"｜ATR {atr:,.4f}｜4h {context.frame('4h').trend if context.frame('4h') else 'n/a'}"
+            f"｜1d {context.frame('1d').trend if context.frame('1d') else 'n/a'}"
+        )
         time.sleep(0.2)
     BASELINE_SEED_PATH.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"\n已寫入 {len(out)}/{len(cfg.binance_symbols)} 個標的 → {BASELINE_SEED_PATH}")
+    CONTEXT_SEED_PATH.write_text(
+        json.dumps({code: {"context": row["context"]} for code, row in out.items()}, ensure_ascii=False, indent=1),
+        encoding="utf-8",
+    )
+    print(
+        f"\n已寫入 {len(out)}/{len(cfg.binance_symbols)} 個標的（含 4h/1d 上下文）→ "
+        f"{BASELINE_SEED_PATH.name} + {CONTEXT_SEED_PATH.name}"
+    )
     return len(out)
 
 

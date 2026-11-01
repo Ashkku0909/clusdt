@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,17 @@ CVD_BARS = 20
 OI_PERIOD = "15m"
 CACHE_DIR = Path(__file__).resolve().parent / "data" / "context"
 CACHE_MAX_AGE_SEC = 6 * 3600.0
+FLOW_META_TTL_SEC = 3600.0  # OI / 資金費率 快取（大幅降低 418 風險）
+_FLOW_META: dict[str, tuple[float, float, float, float, float]] = {}
+
+TREND_ZH = {"up": "多頭", "down": "空頭", "range": "震盪"}
+
+
+def trend_zh(frame: FrameContext | None) -> str:
+    """卡片用：多頭 / 空頭 / 震盪。"""
+    if frame is None:
+        return "震盪"
+    return TREND_ZH.get(frame.trend, "震盪")
 
 OI_MATRIX_LABELS = {
     "long_buildup": "多頭增倉",
@@ -248,7 +260,14 @@ def load_context_cache(
         return None
 
 
-def fetch_market_context(session: requests.Session, symbol: str, bars: int = 120) -> MarketContext:
+def fetch_market_context(
+    session: requests.Session, symbol: str, bars: int = 120, include_flow: bool = True
+) -> MarketContext:
+    """抓取多周期上下文。
+
+    include_flow=False 時不呼叫 openInterestHist / premiumIndex（最容易觸發 418 的兩個端點），
+    直接用 1 小時內快取；沒有快取則以 0 代。引擎只在每小時第一次刷新時開啟它們。
+    """
     frames: dict[str, FrameContext] = {}
     price = 0.0
     price_change_1h = 0.0
@@ -282,18 +301,38 @@ def fetch_market_context(session: requests.Session, symbol: str, bars: int = 120
             trend=trend,
         )
 
-    oi_rows = _json(
-        session,
-        "/futures/data/openInterestHist",
-        {"symbol": symbol, "period": OI_PERIOD, "limit": 25},
-    )
-    oi_values = [float(row["sumOpenInterestValue"]) for row in oi_rows if row.get("sumOpenInterestValue")]
-    oi_now = oi_values[-1] if oi_values else 0.0
-    oi_15m = (oi_values[-1] - oi_values[-2]) / oi_values[-2] * 100.0 if len(oi_values) >= 2 and oi_values[-2] else 0.0
-    oi_1h = (oi_values[-1] - oi_values[-5]) / oi_values[-5] * 100.0 if len(oi_values) >= 5 and oi_values[-5] else 0.0
-
-    premium = _json(session, "/fapi/v1/premiumIndex", {"symbol": symbol})
-    funding = float(premium.get("lastFundingRate") or 0.0)
+    oi_now = oi_15m = oi_1h = 0.0
+    funding = 0.0
+    cached_meta = _FLOW_META.get(symbol)
+    meta_fresh = cached_meta is not None and (time.time() - cached_meta[0]) <= FLOW_META_TTL_SEC
+    if cached_meta is not None and (meta_fresh or not include_flow):
+        _, oi_now, oi_15m, oi_1h, funding = cached_meta
+    if include_flow and not meta_fresh:
+        try:
+            oi_rows = _json(
+                session,
+                "/futures/data/openInterestHist",
+                {"symbol": symbol, "period": OI_PERIOD, "limit": 25},
+            )
+            oi_values = [
+                float(row["sumOpenInterestValue"]) for row in oi_rows if row.get("sumOpenInterestValue")
+            ]
+            oi_now = oi_values[-1] if oi_values else 0.0
+            oi_15m = (
+                (oi_values[-1] - oi_values[-2]) / oi_values[-2] * 100.0
+                if len(oi_values) >= 2 and oi_values[-2]
+                else 0.0
+            )
+            oi_1h = (
+                (oi_values[-1] - oi_values[-5]) / oi_values[-5] * 100.0
+                if len(oi_values) >= 5 and oi_values[-5]
+                else 0.0
+            )
+            premium = _json(session, "/fapi/v1/premiumIndex", {"symbol": symbol})
+            funding = float(premium.get("lastFundingRate") or 0.0)
+            _FLOW_META[symbol] = (time.time(), oi_now, oi_15m, oi_1h, funding)
+        except Exception as exc:  # noqa: BLE001 - OI/資金費率非必要，失敗用舊值/0
+            log.debug("%s OI/資金費率更新失敗（沿用快取）：%s", symbol, exc)
 
     matrix = classify_oi_matrix(price_change_1h, oi_1h)
     return MarketContext(
@@ -415,9 +454,9 @@ def grade_signal(
 
 
 def context_line(context: MarketContext | None, reasons: list[str] | None = None) -> str:
-    """警報用的一行上下文摘要。"""
+    """內部偵錯用的一行上下文摘要（不再出現在付費頻道卡片）。"""
     if context is None:
-        return "市場上下文：暫不可用（交易所限流，數據約 5 分鐘內自動恢復）"
+        return "market context: unavailable"
     frame_near = context.frame("1h")
     frame1h = context.frame("1h")
     parts = []
@@ -436,7 +475,4 @@ def context_line(context: MarketContext | None, reasons: list[str] | None = None
     parts.append(f"資金費率 {context.funding_rate * 100:+.4f}%")
     if reasons:
         parts.append("、".join(reasons[:4]))
-    age_min = (datetime.now(timezone.utc) - context.fetched_at).total_seconds() / 60.0
-    if age_min >= 15:
-        parts.append(f"⚠️ 數據 {age_min:.0f} 分鐘前")
     return "｜".join(parts)

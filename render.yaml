@@ -49,19 +49,29 @@ services:
       - key: ORDERFLOW_SR_PROXIMITY_PCT
         value: "0.3"
       - key: ORDERFLOW_ATR_MULT
-        value: "1.8"
+        value: "1.6"
       - key: ORDERFLOW_ATR_INTERVAL
         value: "4h"
       - key: ORDERFLOW_TP1_ATR_MULT
-        value: "3.6"
+        value: "1.2"
       - key: ORDERFLOW_TP2_ATR_MULT
-        value: "6.0"
-      - key: ORDERFLOW_MIN_TP1_PCT
-        value: "2.5"
+        value: "2.4"
+      - key: ORDERFLOW_TP3_ATR_MULT
+        value: "4.0"
       - key: ORDERFLOW_MIN_TP1_PCT_METALS
-        value: "1.8"
-      - key: ORDERFLOW_MIN_SL_PCT
-        value: "1.0"
+        value: "0.55"
+      - key: ORDERFLOW_MIN_SL_PCT_METALS
+        value: "0.65"
+      - key: ORDERFLOW_MIN_TP1_PCT_MAJORS
+        value: "0.85"
+      - key: ORDERFLOW_MIN_SL_PCT_MAJORS
+        value: "1.00"
+      - key: ORDERFLOW_MIN_TP1_PCT_ALTS
+        value: "1.20"
+      - key: ORDERFLOW_MIN_SL_PCT_ALTS
+        value: "1.40"
+      - key: ORDERFLOW_FLOW_META_TTL_SEC
+        value: "3600"
       - key: ORDERFLOW_COOLDOWN_SEC
         value: "7200"
       - key: ORDERFLOW_MIN_GAP_SEC
@@ -71,7 +81,7 @@ services:
       - key: ORDERFLOW_MIN_MOVE_ATR_MULT
         value: "1.5"
       - key: ORDERFLOW_BREAKOUT_CUSHION_ATR
-        value: "0.8"
+        value: "0.55"
       - key: ORDERFLOW_REQUIRE_CONTEXT
         value: "1"
       - key: ORDERFLOW_CONTEXT_MAX_AGE_SEC
@@ -81,7 +91,7 @@ services:
       - key: ORDERFLOW_HEAL_INTERVAL_SEC
         value: "8.0"
       - key: ORDERFLOW_TA_REFRESH_SEC
-        value: "900"
+        value: "1800"
       - key: ORDERFLOW_MIN_WINDOW_USD
         value: "250000"
       - key: ORDERFLOW_SNAPSHOT_MAX_AGE_SEC

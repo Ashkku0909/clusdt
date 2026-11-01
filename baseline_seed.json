@@ -2,323 +2,1266 @@
  "CLUSDT": {
   "symbol": "CLUSDT",
   "kline_interval": "4h",
-  "atr": 0.9142071075615287,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "atr": 0.9313499647043855,
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 102.85,
-   "high_24h": 103.17,
+   "last_price": 102.67,
+   "high_24h": 103.15,
    "low_24h": 102.09,
-   "quote_volume_24h": 102291696.6179,
-   "trade_count_24h": 135435,
-   "fetched_at": "2026-11-01T10:45:22.556418+00:00"
+   "quote_volume_24h": 101204490.0753,
+   "trade_count_24h": 135024,
+   "fetched_at": "2026-11-01T11:42:47.442620+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:42:48.109256+00:00",
+   "oi_matrix": "long_liquidation",
+   "oi_matrix_label": "多頭平倉",
+   "oi_change_15m_pct": 0.042737091683881366,
+   "oi_change_1h_pct": -0.2812198511987013,
+   "funding_rate": 0.0,
+   "oi_now_usd": 385129003.7651,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 19.92004755150571,
+     "plus_di": 15.034544633369238,
+     "minus_di": 27.992661194653582,
+     "atr": 0.22105251825665273,
+     "cvd_usd": 2890798.7599000037,
+     "price_change_pct": 1.6031667491340968,
+     "trend": "range"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 16.212729780257146,
+     "plus_di": 18.86662514622287,
+     "minus_di": 18.303942511305532,
+     "atr": 0.9224039039971548,
+     "cvd_usd": 61856962.5288,
+     "price_change_pct": 10.090070769890625,
+     "trend": "range"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 36.88292290341481,
+     "plus_di": 25.693476866637376,
+     "minus_di": 12.675401171334803,
+     "atr": 2.8643373840734543,
+     "cvd_usd": 330184465.25190073,
+     "price_change_pct": 50.32210834553441,
+     "trend": "up"
+    }
+   }
   }
  },
  "BTCUSDT": {
   "symbol": "BTCUSDT",
   "kline_interval": "4h",
   "atr": 753.9721412785902,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 78002.0,
+   "last_price": 77921.5,
    "high_24h": 78231.3,
    "low_24h": 77333.4,
-   "quote_volume_24h": 3808578846.68,
-   "trade_count_24h": 1094997,
-   "fetched_at": "2026-11-01T10:45:23.013506+00:00"
+   "quote_volume_24h": 3826664333.64,
+   "trade_count_24h": 1099467,
+   "fetched_at": "2026-11-01T11:42:48.392531+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:42:49.125896+00:00",
+   "oi_matrix": "long_liquidation",
+   "oi_matrix_label": "多頭平倉",
+   "oi_change_15m_pct": 0.02770794164950601,
+   "oi_change_1h_pct": -0.12021063878131849,
+   "funding_rate": 0.0001,
+   "oi_now_usd": 7617717397.15458,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 20.025508028805156,
+     "plus_di": 25.05719293928915,
+     "minus_di": 14.056996115733176,
+     "atr": 219.05896173199676,
+     "cvd_usd": 39220045.357799955,
+     "price_change_pct": -3.0065885041618414,
+     "trend": "range"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 27.731729146799065,
+     "plus_di": 18.51441626016892,
+     "minus_di": 26.829157230603407,
+     "atr": 755.6441891603025,
+     "cvd_usd": -1055725641.8069996,
+     "price_change_pct": -5.75566368288456,
+     "trend": "down"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 21.267604211077444,
+     "plus_di": 14.773192379983278,
+     "minus_di": 28.20234471232139,
+     "atr": 1966.265415064544,
+     "cvd_usd": -2022610823.0717027,
+     "price_change_pct": 22.497724668367468,
+     "trend": "range"
+    }
+   }
   }
  },
  "ETHUSDT": {
   "symbol": "ETHUSDT",
   "kline_interval": "4h",
-  "atr": 27.82433856798197,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "atr": 27.87076713941055,
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 2269.77,
+   "last_price": 2268.42,
    "high_24h": 2277.63,
    "low_24h": 2242.81,
-   "quote_volume_24h": 2555937168.64,
-   "trade_count_24h": 1408113,
-   "fetched_at": "2026-11-01T10:45:23.496692+00:00"
+   "quote_volume_24h": 2567164529.8,
+   "trade_count_24h": 1410880,
+   "fetched_at": "2026-11-01T11:42:49.428026+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:42:50.202356+00:00",
+   "oi_matrix": "neutral",
+   "oi_matrix_label": "持倉中性",
+   "oi_change_15m_pct": -0.04356904144025124,
+   "oi_change_1h_pct": -0.08280691560839004,
+   "funding_rate": -1.015e-05,
+   "oi_now_usd": 5413553259.10992,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 30.457477501601886,
+     "plus_di": 26.10762655105877,
+     "minus_di": 10.418828421342926,
+     "atr": 8.228251823309247,
+     "cvd_usd": 34927762.50366999,
+     "price_change_pct": -2.8289197501777696,
+     "trend": "up"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 29.64519075688142,
+     "plus_di": 16.346095078298042,
+     "minus_di": 23.712430263501783,
+     "atr": 27.95036902002647,
+     "cvd_usd": -1104587315.5938,
+     "price_change_pct": -10.3034328960167,
+     "trend": "down"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 31.085412929202818,
+     "plus_di": 13.420642177788295,
+     "minus_di": 29.44271759048219,
+     "atr": 83.73397565702902,
+     "cvd_usd": -2341904915.6085167,
+     "price_change_pct": 27.08073072764654,
+     "trend": "down"
+    }
+   }
   }
  },
  "SOLUSDT": {
   "symbol": "SOLUSDT",
   "kline_interval": "4h",
   "atr": 1.480097385478638,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 95.35,
+   "last_price": 95.3,
    "high_24h": 96.38,
    "low_24h": 95.16,
-   "quote_volume_24h": 527372820.4684,
-   "trade_count_24h": 830229,
-   "fetched_at": "2026-11-01T10:45:24.123296+00:00"
+   "quote_volume_24h": 530404637.2518,
+   "trade_count_24h": 834564,
+   "fetched_at": "2026-11-01T11:42:50.552511+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:42:51.491234+00:00",
+   "oi_matrix": "neutral",
+   "oi_matrix_label": "持倉中性",
+   "oi_change_15m_pct": 0.024916344475531822,
+   "oi_change_1h_pct": -0.06392370036160888,
+   "funding_rate": 0.0001,
+   "oi_now_usd": 865423915.2271367,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 9.115642493093093,
+     "plus_di": 15.984848579702316,
+     "minus_di": 17.24862772701748,
+     "atr": 0.49560116682818495,
+     "cvd_usd": 6059107.490199991,
+     "price_change_pct": -5.521958957073468,
+     "trend": "range"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 27.88271975396833,
+     "plus_di": 15.891387866463141,
+     "minus_di": 31.198691229307173,
+     "atr": 1.4855243542454277,
+     "cvd_usd": -139407645.62540004,
+     "price_change_pct": -12.4655520852471,
+     "trend": "down"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 31.096573233911887,
+     "plus_di": 11.708864608976432,
+     "minus_di": 30.06990780988821,
+     "atr": 4.195155988856588,
+     "cvd_usd": -350373821.86690044,
+     "price_change_pct": 16.860821581851624,
+     "trend": "down"
+    }
+   }
   }
  },
  "XRPUSDT": {
   "symbol": "XRPUSDT",
   "kline_interval": "4h",
   "atr": 0.017312664875193697,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 1.2564,
+   "last_price": 1.2543,
    "high_24h": 1.2603,
    "low_24h": 1.2458,
-   "quote_volume_24h": 228729495.8725,
-   "trade_count_24h": 587995,
-   "fetched_at": "2026-11-01T10:45:24.650057+00:00"
+   "quote_volume_24h": 231962192.8011,
+   "trade_count_24h": 597770,
+   "fetched_at": "2026-11-01T11:42:51.800921+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:42:52.696700+00:00",
+   "oi_matrix": "short_covering",
+   "oi_matrix_label": "空頭回補",
+   "oi_change_15m_pct": -0.0532364054335325,
+   "oi_change_1h_pct": -0.3828921537018934,
+   "funding_rate": 0.0001,
+   "oi_now_usd": 343391892.3372765,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 8.76387417523677,
+     "plus_di": 21.562906369594813,
+     "minus_di": 17.32178559216101,
+     "atr": 0.005550174658201457,
+     "cvd_usd": 7727657.491609996,
+     "price_change_pct": -4.536113859502253,
+     "trend": "range"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 23.62785815465424,
+     "plus_di": 16.649587604330545,
+     "minus_di": 25.006913857007195,
+     "atr": 0.017350063625275764,
+     "cvd_usd": -25057804.98975002,
+     "price_change_pct": -8.892117689792958,
+     "trend": "range"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 19.81208948394226,
+     "plus_di": 15.7412492414972,
+     "minus_di": 28.43519146440026,
+     "atr": 0.05459141479868477,
+     "cvd_usd": -185881255.82760984,
+     "price_change_pct": 8.439256376999559,
+     "trend": "range"
+    }
+   }
   }
  },
  "LINKUSDT": {
   "symbol": "LINKUSDT",
   "kline_interval": "4h",
   "atr": 0.2969057547891244,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 11.738,
+   "last_price": 11.796,
    "high_24h": 11.946,
    "low_24h": 11.471,
-   "quote_volume_24h": 123270198.5,
-   "trade_count_24h": 406784,
-   "fetched_at": "2026-11-01T10:45:25.161103+00:00"
+   "quote_volume_24h": 123083744.09,
+   "trade_count_24h": 411490,
+   "fetched_at": "2026-11-01T11:42:52.975004+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:42:53.837443+00:00",
+   "oi_matrix": "long_buildup",
+   "oi_matrix_label": "多頭增倉",
+   "oi_change_15m_pct": 0.5754020176875241,
+   "oi_change_1h_pct": 1.3396444373971383,
+   "funding_rate": 0.0001,
+   "oi_now_usd": 100581252.3414,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 27.456206789783895,
+     "plus_di": 28.773289099137095,
+     "minus_di": 13.93411416556184,
+     "atr": 0.11343532212189819,
+     "cvd_usd": -4773415.799030003,
+     "price_change_pct": 3.509079743837182,
+     "trend": "up"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 16.334760432302865,
+     "plus_di": 27.238486957897987,
+     "minus_di": 21.087330661656132,
+     "atr": 0.2974767268817023,
+     "cvd_usd": -18898975.26231,
+     "price_change_pct": -9.343065693430665,
+     "trend": "range"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 26.662380529891035,
+     "plus_di": 16.271856475890004,
+     "minus_di": 26.32379892848752,
+     "atr": 0.7034136627784633,
+     "cvd_usd": -38569630.385920025,
+     "price_change_pct": 46.352357320099244,
+     "trend": "down"
+    }
+   }
   }
  },
  "ENAUSDT": {
   "symbol": "ENAUSDT",
   "kline_interval": "4h",
   "atr": 0.008215212132651523,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 0.18719,
+   "last_price": 0.18732,
    "high_24h": 0.19509,
    "low_24h": 0.18565,
-   "quote_volume_24h": 147538517.33499,
-   "trade_count_24h": 936696,
-   "fetched_at": "2026-11-01T10:45:25.655825+00:00"
+   "quote_volume_24h": 146013360.24103,
+   "trade_count_24h": 925589,
+   "fetched_at": "2026-11-01T11:42:54.253806+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:42:55.866026+00:00",
+   "oi_matrix": "short_buildup",
+   "oi_matrix_label": "空頭增倉",
+   "oi_change_15m_pct": 0.2558577245458296,
+   "oi_change_1h_pct": 0.5750610131876743,
+   "funding_rate": 5e-05,
+   "oi_now_usd": 102780791.63329114,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 9.201234628126683,
+     "plus_di": 18.227183373356382,
+     "minus_di": 17.31799050656573,
+     "atr": 0.002556090929325074,
+     "cvd_usd": -5087676.90497,
+     "price_change_pct": -9.476176669566065,
+     "trend": "range"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 15.723746773970259,
+     "plus_di": 15.977440214860177,
+     "minus_di": 21.8321183869683,
+     "atr": 0.008252779859754018,
+     "cvd_usd": -51038768.76215,
+     "price_change_pct": -15.490797546012264,
+     "trend": "range"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 17.683697610039626,
+     "plus_di": 14.238852991856438,
+     "minus_di": 21.72153041287075,
+     "atr": 0.02098445391330019,
+     "cvd_usd": -167010759.49376,
+     "price_change_pct": 132.30406746031744,
+     "trend": "range"
+    }
+   }
   }
  },
  "XAUUSDT": {
   "symbol": "XAUUSDT",
   "kline_interval": "4h",
   "atr": 17.048422169388914,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 3892.63,
+   "last_price": 3893.88,
    "high_24h": 3895.83,
    "low_24h": 3887.3,
-   "quote_volume_24h": 158488230.36,
-   "trade_count_24h": 168017,
-   "fetched_at": "2026-11-01T10:45:26.244716+00:00"
+   "quote_volume_24h": 159877954.81,
+   "trade_count_24h": 170568,
+   "fetched_at": "2026-11-01T11:42:56.278356+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:42:57.219737+00:00",
+   "oi_matrix": "neutral",
+   "oi_matrix_label": "持倉中性",
+   "oi_change_15m_pct": 0.04383221613517287,
+   "oi_change_1h_pct": 0.048035044832866344,
+   "funding_rate": 0.0,
+   "oi_now_usd": 703105048.01152,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 38.028039537297204,
+     "plus_di": 16.71537618942203,
+     "minus_di": 25.257566874629493,
+     "atr": 3.1774166514193234,
+     "cvd_usd": 1480217.329159999,
+     "price_change_pct": -3.432301328280776,
+     "trend": "down"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 53.317646799727434,
+     "plus_di": 8.269543384267367,
+     "minus_di": 36.74333525840813,
+     "atr": 16.777581141413272,
+     "cvd_usd": -161463302.97802976,
+     "price_change_pct": -6.681109891532014,
+     "trend": "down"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 34.02517906218199,
+     "plus_di": 13.629834037135542,
+     "minus_di": 36.58751041070537,
+     "atr": 54.290589984142755,
+     "cvd_usd": -726451651.2408202,
+     "price_change_pct": -6.960496417128004,
+     "trend": "down"
+    }
+   }
   }
  },
  "XAGUSDT": {
   "symbol": "XAGUSDT",
   "kline_interval": "4h",
-  "atr": 0.46376412601858885,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "atr": 0.4659069831614456,
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 49.65,
+   "last_price": 49.71,
    "high_24h": 49.75,
    "low_24h": 49.37,
-   "quote_volume_24h": 49380412.8603,
-   "trade_count_24h": 46895,
-   "fetched_at": "2026-11-01T10:45:26.686791+00:00"
+   "quote_volume_24h": 50564915.5376,
+   "trade_count_24h": 47761,
+   "fetched_at": "2026-11-01T11:42:57.520617+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:42:58.395625+00:00",
+   "oi_matrix": "long_buildup",
+   "oi_matrix_label": "多頭增倉",
+   "oi_change_15m_pct": -0.012637000135263813,
+   "oi_change_1h_pct": 0.1719465390625854,
+   "funding_rate": 0.0,
+   "oi_now_usd": 290753806.5876621,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 26.215748314414533,
+     "plus_di": 29.314435918643763,
+     "minus_di": 15.585433342568376,
+     "atr": 0.09796383320179078,
+     "cvd_usd": 2035188.1843399997,
+     "price_change_pct": -7.585052983825986,
+     "trend": "up"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 66.31688709812789,
+     "plus_di": 8.085357217704505,
+     "minus_di": 35.033721673138224,
+     "atr": 0.46072774886474827,
+     "cvd_usd": -92145337.9062601,
+     "price_change_pct": -17.65777704157694,
+     "trend": "down"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 42.67924512615442,
+     "plus_di": 9.604203614132706,
+     "minus_di": 38.642519402902124,
+     "atr": 1.5545764344025796,
+     "cvd_usd": -272845726.93299985,
+     "price_change_pct": -20.919503658924594,
+     "trend": "down"
+    }
+   }
   }
  },
  "BNBUSDT": {
   "symbol": "BNBUSDT",
   "kline_interval": "4h",
   "atr": 10.3645873904802,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 714.83,
+   "last_price": 714.54,
    "high_24h": 716.46,
    "low_24h": 702.0,
-   "quote_volume_24h": 281060238.399,
-   "trade_count_24h": 721376,
-   "fetched_at": "2026-11-01T10:45:27.161492+00:00"
+   "quote_volume_24h": 287738284.858,
+   "trade_count_24h": 730229,
+   "fetched_at": "2026-11-01T11:42:58.752533+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:42:59.465859+00:00",
+   "oi_matrix": "short_covering",
+   "oi_matrix_label": "空頭回補",
+   "oi_change_15m_pct": -0.1334548911221164,
+   "oi_change_1h_pct": -0.10064003018896267,
+   "funding_rate": 4.126e-05,
+   "oi_now_usd": 414312961.8328003,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 17.037479717501885,
+     "plus_di": 28.465589346335552,
+     "minus_di": 12.134504218614044,
+     "atr": 3.4753430855915086,
+     "cvd_usd": -3033791.6358000007,
+     "price_change_pct": -3.8731115386167754,
+     "trend": "range"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 36.84340588942057,
+     "plus_di": 17.083624400273305,
+     "minus_di": 26.61344347842462,
+     "atr": 10.393961910317273,
+     "cvd_usd": -101607373.49640006,
+     "price_change_pct": -4.260792668220927,
+     "trend": "down"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 25.925402946227187,
+     "plus_di": 14.009003102950626,
+     "minus_di": 29.478106011492155,
+     "atr": 24.024939700707673,
+     "cvd_usd": -171253810.0672002,
+     "price_change_pct": 21.042824230925582,
+     "trend": "down"
+    }
+   }
   }
  },
  "COINUSDT": {
   "symbol": "COINUSDT",
   "kline_interval": "4h",
   "atr": 2.5530018459476413,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 146.86,
+   "last_price": 146.79,
    "high_24h": 147.35,
    "low_24h": 145.45,
-   "quote_volume_24h": 5391429.8062,
-   "trade_count_24h": 38612,
-   "fetched_at": "2026-11-01T10:45:27.605487+00:00"
+   "quote_volume_24h": 5246240.58,
+   "trade_count_24h": 37966,
+   "fetched_at": "2026-11-01T11:42:59.790185+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:43:00.678668+00:00",
+   "oi_matrix": "long_liquidation",
+   "oi_matrix_label": "多頭平倉",
+   "oi_change_15m_pct": -0.030402120428909607,
+   "oi_change_1h_pct": -0.17565732363345163,
+   "funding_rate": 0.0,
+   "oi_now_usd": 19926965.3796,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 12.411194215130024,
+     "plus_di": 25.113074093275703,
+     "minus_di": 17.771685021890136,
+     "atr": 0.505807267175465,
+     "cvd_usd": 417309.20929999975,
+     "price_change_pct": -9.689922480620156,
+     "trend": "range"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 39.84327282594439,
+     "plus_di": 14.863464192053609,
+     "minus_di": 33.68507923355824,
+     "atr": 2.545761868971179,
+     "cvd_usd": -7148931.279900002,
+     "price_change_pct": -18.90055248618785,
+     "trend": "down"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 28.856231170612293,
+     "plus_di": 9.520956065209091,
+     "minus_di": 33.044978285353885,
+     "atr": 7.78712582631498,
+     "cvd_usd": -21463999.55769997,
+     "price_change_pct": -15.870013755158183,
+     "trend": "down"
+    }
+   }
   }
  },
  "HOODUSDT": {
   "symbol": "HOODUSDT",
   "kline_interval": "4h",
   "atr": 1.314448166588805,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 86.0,
+   "last_price": 85.99,
    "high_24h": 86.19,
    "low_24h": 85.15,
-   "quote_volume_24h": 1717753.3236,
-   "trade_count_24h": 18735,
-   "fetched_at": "2026-11-01T10:45:28.040748+00:00"
+   "quote_volume_24h": 1787463.0739,
+   "trade_count_24h": 19015,
+   "fetched_at": "2026-11-01T11:43:01.060100+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:43:01.841037+00:00",
+   "oi_matrix": "short_covering",
+   "oi_matrix_label": "空頭回補",
+   "oi_change_15m_pct": -0.16239774727665512,
+   "oi_change_1h_pct": -0.2334142283543211,
+   "funding_rate": 0.0,
+   "oi_now_usd": 11609752.46709146,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 12.323422796324014,
+     "plus_di": 19.825998271149807,
+     "minus_di": 18.365520310798875,
+     "atr": 0.25305508549120476,
+     "cvd_usd": -12991.03360000003,
+     "price_change_pct": -9.550857263069316,
+     "trend": "range"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 27.655131990323888,
+     "plus_di": 16.05709052728951,
+     "minus_di": 27.85429526856305,
+     "atr": 1.3035132000271086,
+     "cvd_usd": -1660559.8007999966,
+     "price_change_pct": -20.928735632183912,
+     "trend": "down"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 37.30991532563082,
+     "plus_di": 8.570419169174043,
+     "minus_di": 31.87689821797255,
+     "atr": 4.483401934782299,
+     "cvd_usd": -8630709.055900015,
+     "price_change_pct": -24.91923513489916,
+     "trend": "down"
+    }
+   }
   }
  },
  "SPCXUSDT": {
   "symbol": "SPCXUSDT",
   "kline_interval": "4h",
-  "atr": 1.6388104446501341,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "atr": 1.6423818732215636,
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 137.92,
+   "last_price": 137.89,
    "high_24h": 138.26,
    "low_24h": 136.86,
-   "quote_volume_24h": 38616750.1986,
-   "trade_count_24h": 102858,
-   "fetched_at": "2026-11-01T10:45:28.583781+00:00"
+   "quote_volume_24h": 38802774.7595,
+   "trade_count_24h": 102521,
+   "fetched_at": "2026-11-01T11:43:02.144135+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:43:02.855567+00:00",
+   "oi_matrix": "neutral",
+   "oi_matrix_label": "持倉中性",
+   "oi_change_15m_pct": 0.012286382162937233,
+   "oi_change_1h_pct": -0.07023994310440596,
+   "funding_rate": 0.0,
+   "oi_now_usd": 558864629.184,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 17.925276574524716,
+     "plus_di": 21.559373999342473,
+     "minus_di": 15.370251820019352,
+     "atr": 0.3615145117089866,
+     "cvd_usd": 345872.9607000012,
+     "price_change_pct": -7.388004567130096,
+     "trend": "range"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 52.97357183420261,
+     "plus_di": 9.872081468882905,
+     "minus_di": 28.63952080861571,
+     "atr": 1.6108985694992664,
+     "cvd_usd": -80405417.0384,
+     "price_change_pct": -16.109995741315338,
+     "trend": "down"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 16.932587129642215,
+     "plus_di": 18.953516268523014,
+     "minus_di": 31.616905091237996,
+     "atr": 5.861670938758462,
+     "cvd_usd": -362478860.48430043,
+     "price_change_pct": -14.598042858912436,
+     "trend": "range"
+    }
+   }
   }
  },
  "CRCLUSDT": {
   "symbol": "CRCLUSDT",
   "kline_interval": "4h",
   "atr": 1.2036796743767089,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 73.12,
+   "last_price": 73.11,
    "high_24h": 73.42,
    "low_24h": 72.59,
-   "quote_volume_24h": 24929123.0231,
-   "trade_count_24h": 77516,
-   "fetched_at": "2026-11-01T10:45:29.042237+00:00"
+   "quote_volume_24h": 25504021.1411,
+   "trade_count_24h": 80664,
+   "fetched_at": "2026-11-01T11:43:03.130320+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:43:03.859469+00:00",
+   "oi_matrix": "short_covering",
+   "oi_matrix_label": "空頭回補",
+   "oi_change_15m_pct": 0.0034765198419214136,
+   "oi_change_1h_pct": -0.22983672318324855,
+   "funding_rate": 0.0,
+   "oi_now_usd": 119009113.146,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 21.080703125106748,
+     "plus_di": 17.685419681975574,
+     "minus_di": 13.31076081072931,
+     "atr": 0.30370406941482847,
+     "cvd_usd": -1524781.4451,
+     "price_change_pct": -9.304056568663938,
+     "trend": "range"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 46.903843526197456,
+     "plus_di": 11.211379198860557,
+     "minus_di": 33.33724451749852,
+     "atr": 1.1973726756804954,
+     "cvd_usd": -49489723.48340001,
+     "price_change_pct": -13.129752851711023,
+     "trend": "down"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 16.85171257758234,
+     "plus_di": 14.375494508266135,
+     "minus_di": 28.848848388232085,
+     "atr": 4.2167884738919925,
+     "cvd_usd": -194235500.53029996,
+     "price_change_pct": 5.635023840485488,
+     "trend": "range"
+    }
+   }
   }
  },
  "MUUSDT": {
   "symbol": "MUUSDT",
   "kline_interval": "4h",
   "atr": 14.1090513812863,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 907.87,
+   "last_price": 906.19,
    "high_24h": 909.21,
    "low_24h": 894.15,
-   "quote_volume_24h": 43650828.3683,
-   "trade_count_24h": 149467,
-   "fetched_at": "2026-11-01T10:45:29.522798+00:00"
+   "quote_volume_24h": 43232169.7094,
+   "trade_count_24h": 151297,
+   "fetched_at": "2026-11-01T11:43:04.199525+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:43:05.424246+00:00",
+   "oi_matrix": "long_buildup",
+   "oi_matrix_label": "多頭增倉",
+   "oi_change_15m_pct": 0.022085864217678598,
+   "oi_change_1h_pct": 0.7469516372156547,
+   "funding_rate": 0.0,
+   "oi_now_usd": 130403479.53650245,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 17.140610088069558,
+     "plus_di": 27.28049318343592,
+     "minus_di": 11.752080836471663,
+     "atr": 3.3470763936350574,
+     "cvd_usd": -1445404.8887000012,
+     "price_change_pct": -2.2796631188465795,
+     "trend": "range"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 21.87942467429682,
+     "plus_di": 20.84906879343885,
+     "minus_di": 23.76481498206266,
+     "atr": 13.942305698763356,
+     "cvd_usd": -38880216.660000026,
+     "price_change_pct": -9.357432932562462,
+     "trend": "range"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 28.58649904474417,
+     "plus_di": 19.110565162120093,
+     "minus_di": 28.20820551406816,
+     "atr": 42.62882006204973,
+     "cvd_usd": -154799417.21940023,
+     "price_change_pct": -11.64207919343986,
+     "trend": "down"
+    }
+   }
   }
  },
  "SNDKUSDT": {
   "symbol": "SNDKUSDT",
   "kline_interval": "4h",
   "atr": 27.78737702260801,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 1168.68,
+   "last_price": 1166.77,
    "high_24h": 1178.59,
    "low_24h": 1141.98,
-   "quote_volume_24h": 167948734.3843,
-   "trade_count_24h": 405909,
-   "fetched_at": "2026-11-01T10:45:30.078636+00:00"
+   "quote_volume_24h": 175220613.0389,
+   "trade_count_24h": 426355,
+   "fetched_at": "2026-11-01T11:43:05.706741+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:43:06.640096+00:00",
+   "oi_matrix": "short_covering",
+   "oi_matrix_label": "空頭回補",
+   "oi_change_15m_pct": -0.4377424989231051,
+   "oi_change_1h_pct": -0.7976884098574517,
+   "funding_rate": 0.0,
+   "oi_now_usd": 248741896.00635126,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 24.801121337294877,
+     "plus_di": 24.870599154739683,
+     "minus_di": 20.197911168894944,
+     "atr": 6.703361324670857,
+     "cvd_usd": 1388651.1016999967,
+     "price_change_pct": -9.06844980633296,
+     "trend": "range"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 40.06315058283201,
+     "plus_di": 15.817169225042697,
+     "minus_di": 33.84546870409996,
+     "atr": 27.501808245611354,
+     "cvd_usd": -181228210.6214,
+     "price_change_pct": -21.90235870525555,
+     "trend": "down"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 29.169116333190654,
+     "plus_di": 17.561862800218663,
+     "minus_di": 29.92963818524292,
+     "atr": 87.08668787233155,
+     "cvd_usd": -448265885.25639933,
+     "price_change_pct": -36.658813055091095,
+     "trend": "down"
+    }
+   }
   }
  },
  "NVDAUSDT": {
   "symbol": "NVDAUSDT",
   "kline_interval": "4h",
   "atr": 1.610605507468818,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
    "last_price": 204.86,
    "high_24h": 205.24,
    "low_24h": 202.69,
-   "quote_volume_24h": 16340816.1248,
-   "trade_count_24h": 44486,
-   "fetched_at": "2026-11-01T10:45:30.746600+00:00"
+   "quote_volume_24h": 16625088.2649,
+   "trade_count_24h": 46324,
+   "fetched_at": "2026-11-01T11:43:07.019482+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:43:07.986651+00:00",
+   "oi_matrix": "neutral",
+   "oi_matrix_label": "持倉中性",
+   "oi_change_15m_pct": -0.09109323416580269,
+   "oi_change_1h_pct": -0.002003181662850704,
+   "funding_rate": 0.0,
+   "oi_now_usd": 66411278.59470356,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 17.32094351543249,
+     "plus_di": 19.8966818376057,
+     "minus_di": 21.28077060992375,
+     "atr": 0.3930442198362703,
+     "cvd_usd": 799030.9800999996,
+     "price_change_pct": -6.302597877789962,
+     "trend": "range"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 48.86619311542683,
+     "plus_di": 11.749890783173697,
+     "minus_di": 36.490385559634795,
+     "atr": 1.5871056230499914,
+     "cvd_usd": -21236592.63280001,
+     "price_change_pct": -9.70955088368812,
+     "trend": "down"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 22.062563441108438,
+     "plus_di": 15.017859858921275,
+     "minus_di": 30.783473153533507,
+     "atr": 5.221972394828986,
+     "cvd_usd": -82548053.4671,
+     "price_change_pct": 3.2820771363751042,
+     "trend": "range"
+    }
+   }
   }
  },
  "MSFTUSDT": {
   "symbol": "MSFTUSDT",
   "kline_interval": "4h",
   "atr": 4.437317284323881,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 525.67,
+   "last_price": 525.46,
    "high_24h": 526.26,
-   "low_24h": 523.89,
-   "quote_volume_24h": 2877162.2654,
-   "trade_count_24h": 17267,
-   "fetched_at": "2026-11-01T10:45:31.209749+00:00"
+   "low_24h": 523.97,
+   "quote_volume_24h": 2796176.335,
+   "trade_count_24h": 17115,
+   "fetched_at": "2026-11-01T11:43:08.324923+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:43:09.084751+00:00",
+   "oi_matrix": "neutral",
+   "oi_matrix_label": "持倉中性",
+   "oi_change_15m_pct": -0.005172771022941423,
+   "oi_change_1h_pct": -0.02178109013716175,
+   "funding_rate": 0.0,
+   "oi_now_usd": 17931339.06,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 13.766306660956658,
+     "plus_di": 20.16182503349538,
+     "minus_di": 16.197321988797153,
+     "atr": 0.7574324501422607,
+     "cvd_usd": -15907.869200000108,
+     "price_change_pct": -0.9537811958078765,
+     "trend": "range"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 13.221801696796396,
+     "plus_di": 22.92086331653033,
+     "minus_di": 23.76333238276018,
+     "atr": 4.405994390652714,
+     "cvd_usd": -2474311.4389000065,
+     "price_change_pct": -3.1802771226415074,
+     "trend": "range"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 33.064019098941216,
+     "plus_di": 28.128908077479576,
+     "minus_di": 12.912003531173658,
+     "atr": 11.799898719967292,
+     "cvd_usd": 11153656.3024,
+     "price_change_pct": 33.59945081487886,
+     "trend": "up"
+    }
+   }
   }
  },
  "AAPLUSDT": {
   "symbol": "AAPLUSDT",
   "kline_interval": "4h",
-  "atr": 1.8765014214942566,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "atr": 1.8822157072085413,
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 345.56,
-   "high_24h": 345.94,
+   "last_price": 345.3,
+   "high_24h": 345.86,
    "low_24h": 344.77,
-   "quote_volume_24h": 5646232.5782,
-   "trade_count_24h": 28270,
-   "fetched_at": "2026-11-01T10:45:32.130962+00:00"
+   "quote_volume_24h": 5703452.7738,
+   "trade_count_24h": 28131,
+   "fetched_at": "2026-11-01T11:43:09.465402+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:43:10.237884+00:00",
+   "oi_matrix": "neutral",
+   "oi_matrix_label": "持倉中性",
+   "oi_change_15m_pct": -0.005947871507348586,
+   "oi_change_1h_pct": -0.05651552457024394,
+   "funding_rate": 0.0,
+   "oi_now_usd": 50536228.43973616,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 8.701693443408406,
+     "plus_di": 16.199100966756905,
+     "minus_di": 18.468157984797873,
+     "atr": 0.4896506387245497,
+     "cvd_usd": 288629.5641000002,
+     "price_change_pct": 0.5972323379461068,
+     "trend": "range"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 18.37951144679402,
+     "plus_di": 14.659165364004645,
+     "minus_di": 19.104902632587287,
+     "atr": 1.8633250549448086,
+     "cvd_usd": 6817774.143499998,
+     "price_change_pct": 1.4871855161062786,
+     "trend": "range"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 25.01811070514052,
+     "plus_di": 23.006297601306095,
+     "minus_di": 15.926395667678655,
+     "atr": 5.116935488169007,
+     "cvd_usd": 20205389.53069999,
+     "price_change_pct": 11.903295848591897,
+     "trend": "up"
+    }
+   }
   }
  },
  "AMZNUSDT": {
   "symbol": "AMZNUSDT",
   "kline_interval": "4h",
-  "atr": 2.8671722303327023,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "atr": 2.8743150874755594,
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 241.7,
+   "last_price": 241.59,
    "high_24h": 241.89,
    "low_24h": 240.58,
-   "quote_volume_24h": 2383628.7051,
-   "trade_count_24h": 16965,
-   "fetched_at": "2026-11-01T10:45:32.691310+00:00"
+   "quote_volume_24h": 2460452.1344,
+   "trade_count_24h": 16645,
+   "fetched_at": "2026-11-01T11:43:10.540473+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:43:11.704255+00:00",
+   "oi_matrix": "neutral",
+   "oi_matrix_label": "持倉中性",
+   "oi_change_15m_pct": -0.1162651561400864,
+   "oi_change_1h_pct": -0.08661933514289391,
+   "funding_rate": 0.0,
+   "oi_now_usd": 16469375.92273233,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 23.558791723127193,
+     "plus_di": 28.287509009702315,
+     "minus_di": 15.05246354124738,
+     "atr": 0.44410692293411863,
+     "cvd_usd": -69880.64000000001,
+     "price_change_pct": -3.9021479713603826,
+     "trend": "range"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 32.40536344528213,
+     "plus_di": 22.642461060105706,
+     "minus_di": 34.492281503481756,
+     "atr": 2.847831715151064,
+     "cvd_usd": 640667.6953000012,
+     "price_change_pct": -7.730206622617722,
+     "trend": "down"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 23.6485265673225,
+     "plus_di": 13.804790248222046,
+     "minus_di": 39.64484202071475,
+     "atr": 7.663058787592643,
+     "cvd_usd": -8912251.682100007,
+     "price_change_pct": -1.4119567435217335,
+     "trend": "range"
+    }
+   }
   }
  },
  "METAUSDT": {
   "symbol": "METAUSDT",
   "kline_interval": "4h",
-  "atr": 4.874893498430656,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "atr": 4.88703635557351,
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 615.21,
+   "last_price": 614.85,
    "high_24h": 616.49,
    "low_24h": 613.57,
-   "quote_volume_24h": 3833878.2734,
-   "trade_count_24h": 21961,
-   "fetched_at": "2026-11-01T10:45:33.330029+00:00"
+   "quote_volume_24h": 4165862.8462,
+   "trade_count_24h": 23428,
+   "fetched_at": "2026-11-01T11:43:12.050814+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:43:12.958761+00:00",
+   "oi_matrix": "long_liquidation",
+   "oi_matrix_label": "多頭平倉",
+   "oi_change_15m_pct": -0.03403470543512305,
+   "oi_change_1h_pct": -0.2637535800110338,
+   "funding_rate": 0.0,
+   "oi_now_usd": 24843042.0966,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 10.653420073165274,
+     "plus_di": 15.441589114554487,
+     "minus_di": 17.359297739177045,
+     "atr": 0.9223756078866522,
+     "cvd_usd": -376194.2235,
+     "price_change_pct": -2.1484841250895204,
+     "trend": "range"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 18.658096114327318,
+     "plus_di": 18.79547919463117,
+     "minus_di": 18.63369763585485,
+     "atr": 4.718970860015544,
+     "cvd_usd": -2750668.8493999992,
+     "price_change_pct": -17.841442067426538,
+     "trend": "range"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 22.95156864207848,
+     "plus_di": 18.56806600083682,
+     "minus_di": 25.607421161561653,
+     "atr": 21.1338818621589,
+     "cvd_usd": -19127238.161500014,
+     "price_change_pct": 3.8475180299626683,
+     "trend": "range"
+    }
+   }
   }
  },
  "GOOGLUSDT": {
   "symbol": "GOOGLUSDT",
   "kline_interval": "4h",
-  "atr": 3.0790463519655376,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "atr": 3.084760637679822,
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 284.19,
+   "last_price": 284.26,
    "high_24h": 284.83,
    "low_24h": 281.59,
-   "quote_volume_24h": 32885978.5874,
-   "trade_count_24h": 82737,
-   "fetched_at": "2026-11-01T10:45:33.901670+00:00"
+   "quote_volume_24h": 33873976.9837,
+   "trade_count_24h": 85062,
+   "fetched_at": "2026-11-01T11:43:13.387279+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:43:14.329845+00:00",
+   "oi_matrix": "neutral",
+   "oi_matrix_label": "持倉中性",
+   "oi_change_15m_pct": -0.003160065849379721,
+   "oi_change_1h_pct": -0.030415584373161456,
+   "funding_rate": 0.0,
+   "oi_now_usd": 298865438.57128316,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 18.623872640823443,
+     "plus_di": 29.47701552584448,
+     "minus_di": 19.15699130587571,
+     "atr": 0.6000581001806208,
+     "cvd_usd": 307041.8158000002,
+     "price_change_pct": -10.870723983319229,
+     "trend": "range"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 65.73197559085565,
+     "plus_di": 9.127971774009044,
+     "minus_di": 37.50304297878028,
+     "atr": 3.0615919905276963,
+     "cvd_usd": -103041363.40489995,
+     "price_change_pct": -19.95381842757378,
+     "trend": "down"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 37.64081458260153,
+     "plus_di": 8.547209821567217,
+     "minus_di": 39.76604396428258,
+     "atr": 9.177663902751238,
+     "cvd_usd": -203853862.30210012,
+     "price_change_pct": -21.327355252961365,
+     "trend": "down"
+    }
+   }
   }
  },
  "TSLAUSDT": {
   "symbol": "TSLAUSDT",
   "kline_interval": "4h",
   "atr": 3.347913021916283,
-  "saved_at": "2026-11-01T10:45:21.785706+00:00",
+  "saved_at": "2026-11-01T11:42:47.095545+00:00",
   "snapshot": {
-   "last_price": 400.77,
+   "last_price": 400.44,
    "high_24h": 401.57,
    "low_24h": 399.36,
-   "quote_volume_24h": 7164810.8915,
-   "trade_count_24h": 36267,
-   "fetched_at": "2026-11-01T10:45:34.455938+00:00"
+   "quote_volume_24h": 7217206.8849,
+   "trade_count_24h": 36314,
+   "fetched_at": "2026-11-01T11:43:14.667369+00:00"
+  },
+  "context": {
+   "fetched_at": "2026-11-01T11:43:15.452376+00:00",
+   "oi_matrix": "neutral",
+   "oi_matrix_label": "持倉中性",
+   "oi_change_15m_pct": -0.04112475343943186,
+   "oi_change_1h_pct": -0.06767374013170013,
+   "funding_rate": 0.0,
+   "oi_now_usd": 51278156.0352,
+   "frames": {
+    "1h": {
+     "interval": "1h",
+     "adx": 10.10936353665606,
+     "plus_di": 23.648748556558772,
+     "minus_di": 21.614867228625766,
+     "atr": 0.6461416641877209,
+     "cvd_usd": 254390.54170000003,
+     "price_change_pct": 0.942777917822034,
+     "trend": "range"
+    },
+    "4h": {
+     "interval": "4h",
+     "adx": 18.582376547116976,
+     "plus_di": 24.889634094027393,
+     "minus_di": 17.414782563073732,
+     "atr": 3.277446979559784,
+     "cvd_usd": -9702359.9072,
+     "price_change_pct": 5.215586326493083,
+     "trend": "range"
+    },
+    "1d": {
+     "interval": "1d",
+     "adx": 32.51699582232168,
+     "plus_di": 33.87226068660355,
+     "minus_di": 14.422956919306955,
+     "atr": 12.029618211777088,
+     "cvd_usd": -32844501.329300012,
+     "price_change_pct": 0.25788683024537545,
+     "trend": "up"
+    }
+   }
   }
  }
 }
