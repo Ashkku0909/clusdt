@@ -51,9 +51,10 @@ Local: Windows, Python 3.12 venv at `d:\github\clusdt\.venv`.
 4. `divergence` — **900s** net delta ≥ divergence against the 900s price direction.
 
 **Levels (ATR = ATR(14) on 4h klines, Wilder):**
-- Entry zone: price −0.50×ATR … price +0.15×ATR (long), mirrored for short — wide enough to be a pullback limit order.
-- Stop loss: `min(price − 1.8×ATR, entry_low − 0.35×ATR)` (long; mirrored short) — always outside the entry zone.
-- TP1 = 3.6×ATR, TP2 = 6.0×ATR (R:R ≈ 1:2.0 / 1:3.3).
+- Entry zone: momentum −0.25/+0.12×ATR, sweep/absorption/divergence −0.35/+0.10×ATR (mirrored for shorts).
+- Stop loss: 1.6×ATR, and always ≥0.30×ATR outside the entry zone.
+- **3-tier exits**: TP1 1.2×ATR (≈0.75R, close 50% + SL to breakeven), TP2 2.4×ATR (1.5R, close 30%), TP3 4.0×ATR (2.5R, runner 20%).
+- Asset-class distance floors widen (not mute): metals 0.55%/0.65%, majors 0.85%/1.00%, alts 1.20%/1.40% of price for TP1/SL.
 
 **Quality filters (this is where the channel's reputation lives):**
 - TP1 distance < `ORDERFLOW_MIN_TP1_PCT` (2.5%, or 1.8% for XAU/XAG) → drop the signal; stop distance < `ORDERFLOW_MIN_SL_PCT` (1.0%) → drop.
@@ -98,8 +99,9 @@ Context is cached to `data/context/{SYMBOL}.json` (6h) and reused during REST ou
 - CLIs: `--serve`, `--once`, `--loop`, `--news`, `--binance-news`, `--orderflow`, `--cftc`, `--equity`, `--health`, `--ping`, `--ws-test N`, `--dump-baseline`.
 
 ## 10. Current tuning state (as of the latest change)
-`ATR interval 4h`; `SL 1.8×ATR`; `TP1 3.6×ATR`; `TP2 6.0×ATR`; `min TP1 2.5%` (metals 1.8%), `min SL 1.0%`; `min grade B`; `cooldown 7200s`; `global gap 2700s`; `same-direction move ≥2.5% or ≥1.5×ATR`; context required and self-healed by a single-flight queue (one symbol every 8s, cold-start REST staggered by index × 6s).
-Expected volume: **a handful of swing cards per day**, each with TP1 ≥ 2.5% and R:R ≥ 1:2.
+`ATR interval 4h`; `SL 1.6×ATR`; `TP1 1.2×` / `TP2 2.4×` / `TP3 4.0×ATR`; asset-class TP1/SL floors (metals 0.55/0.65, majors 0.85/1.00, alts 1.20/1.40); `min grade B` (A≥82); `cooldown 7200s`; `global gap 2700s`; same-direction move ≥2.5% or ≥1.5×ATR; context required, OI/funding cached 1h, TA refresh 1800s.
+**WS-native context**: each engine keeps 60 one-minute buckets from `@trade` and synthesises a live 1h trend/CVD, so `context_seed.json` (4h/1d) + WS 1h keeps grading working through 5-hour 418 bans (macro valid 6h during a ban).
+Expected volume: a handful of swing cards per day, each with a 3-tier exit plan and explicit execution discipline.
 
 ## 11. Known traps / gotchas
 - Editing `.env` alone does nothing on Render — `render.yaml` holds the production env vars; keep both in sync.
