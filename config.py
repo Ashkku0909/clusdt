@@ -161,6 +161,7 @@ class Config:
     orderflow_max_window_usd: float = 12_000_000.0
     orderflow_max_alerts_per_hour: int = 20
     orderflow_min_grade: str = "B"  # A/B/C；C = 不過濾
+    orderflow_enable_equities: bool = True  # 0 = 靜音股票永續（只留幣/金屬/能源）
     # 股票基本面分析（Finnhub + DeepSeek；快取於 data/equities）
     equity_symbols: tuple[str, ...] = (
         "GOOGL",
@@ -274,6 +275,7 @@ def load_config() -> Config:
         orderflow_max_window_usd=_env_float("ORDERFLOW_MAX_WINDOW_USD", 12_000_000.0),
         orderflow_max_alerts_per_hour=_env_int("ORDERFLOW_MAX_ALERTS_PER_HOUR", 20),
         orderflow_min_grade=_env("ORDERFLOW_MIN_GRADE", "B").upper(),
+        orderflow_enable_equities=_env_bool("ORDERFLOW_ENABLE_EQUITIES", True),
         equity_symbols=_env_list(
             "EQUITY_SYMBOLS",
             ("GOOGL", "TSLA", "AAPL", "MSFT", "NVDA", "AMZN", "META", "COIN", "HOOD", "SPCX", "CRCL", "MU", "SNDK"),

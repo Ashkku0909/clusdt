@@ -153,6 +153,12 @@ async def _start_orderflow_engine() -> None:
     budget = AlertBudget(cfg.orderflow_max_alerts_per_hour)
     gate = RestGate()
     symbols = list(cfg.binance_symbols)
+    if not getattr(cfg, "orderflow_enable_equities", True):
+        equity_perps = {f"{code.upper()}USDT" for code in cfg.equity_symbols}
+        skipped = [code for code in symbols if code in equity_perps]
+        symbols = [code for code in symbols if code not in equity_perps]
+        if skipped:
+            log.info("股票永續已靜音（%d 個）：%s", len(skipped), ",".join(skipped))
     stagger = float(getattr(cfg, "orderflow_context_stagger_sec", 6.0))
     CONTEXT_HEALER.configure(float(getattr(cfg, "orderflow_heal_interval_sec", 8.0)))
     tasks: list[asyncio.Task] = []

@@ -51,7 +51,7 @@ Local: Windows, Python 3.12 venv at `d:\github\clusdt\.venv`.
 4. `divergence` — **900s** net delta ≥ divergence against the 900s price direction.
 
 **Levels (ATR = ATR(14) on 4h klines, Wilder):**
-- Entry zone: momentum −0.25/+0.12×ATR, sweep/absorption/divergence −0.35/+0.10×ATR (mirrored for shorts).
+- Entry zone **always brackets the signal price** (max 0.25×ATR away on each side): momentum −0.20/+0.05×ATR, others −0.15/+0.10×ATR, extended to include the key level when it is within 0.25×ATR. A signal whose level is already >0.25×ATR away is dropped (`suppressed_entry`) because the limit order could never fill.
 - Stop loss: 1.6×ATR, and always ≥0.30×ATR outside the entry zone.
 - **3-tier exits**: TP1 1.2×ATR (≈0.75R, close 50% + SL to breakeven), TP2 2.4×ATR (1.5R, close 30%), TP3 4.0×ATR (2.5R, runner 20%).
 - Asset-class distance floors widen (not mute): metals 0.55%/0.65%, majors 0.85%/1.00%, alts 1.20%/1.40% of price for TP1/SL.

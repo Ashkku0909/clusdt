@@ -110,6 +110,8 @@ services:
         value: "20"
       - key: ORDERFLOW_MIN_GRADE
         value: "B"
+      - key: ORDERFLOW_ENABLE_EQUITIES
+        value: "1"
       - key: EQUITY_SYMBOLS
         value: "GOOGL,TSLA,AAPL,MSFT,NVDA,AMZN,META,COIN,HOOD,SPCX,CRCL,MU,SNDK"
       - key: EQUITY_CACHE_TTL_SEC

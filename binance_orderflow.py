@@ -465,6 +465,9 @@ def format_orderflow_alert(signal: OrderflowSignal) -> str:
     def _pct(target: float) -> str:
         return f"{(target - entry) / entry * 100.0:+.2f}%"
 
+    def _zone_pct(base: float, target: float) -> float:
+        return (target - base) / base * 100.0
+
     risk = abs(entry - signal.stop_loss)
     reward1 = abs(signal.tp1 - entry)
     reward2 = abs(signal.tp2 - entry)
@@ -482,7 +485,8 @@ def format_orderflow_alert(signal: OrderflowSignal) -> str:
         f"{symbol_label(signal.symbol)} {KIND_LABELS.get(signal.kind, KIND_LABELS['sweep'])}",
         "━━━━━━━━━━━━━━━━━━",
         f"💵 現價 ${_fmt_price(entry)}",
-        f"🎯 進場 ${_fmt_price(signal.entry_low)} – ${_fmt_price(signal.entry_high)}（限價）",
+        f"🎯 進場 ${_fmt_price(signal.entry_low)} – ${_fmt_price(signal.entry_high)}"
+        f"（距現價 {_zone_pct(entry, signal.entry_low):+.2f}% ~ {_zone_pct(entry, signal.entry_high):+.2f}%）",
         f"🛑 止損 ${_fmt_price(signal.stop_loss)}"
         f"（{_pct(signal.stop_loss)}｜{signal.atr_mult:g}×ATR）",
         f"🥇 TP1 ${_fmt_price(signal.tp1)}（{_pct(signal.tp1)}｜{r1:.2f}R）"
@@ -757,6 +761,7 @@ class OrderflowEngine:
             "suppressed_sl": 0,
             "suppressed_context": 0,
             "suppressed_cushion": 0,
+            "suppressed_entry": 0,
             "max_single_notional": 0.0,
             "max_buy_flow": 0.0,
             "max_sell_flow": 0.0,
@@ -1510,11 +1515,44 @@ class OrderflowEngine:
         atr = self.atr
         if atr is None or atr <= 0:
             return None
-        # --- 進場區依訊號類型：動能突破較窄，吸納/掃單給回踩空間
+        # --- 掛單區：必須包住現價（否則就是「看得到吃不到」的掛單）
+        # 動能突破：等回踩 → 區間偏現價下方；均值回歸：以現價為中心、向關鍵位延伸
+        max_offset = 0.25 * atr
         if candidate.kind == "momentum":
-            zone_below, zone_above = 0.25, 0.12
+            pull, push = 0.20, 0.05
         else:
-            zone_below, zone_above = 0.35, 0.10
+            pull, push = 0.15, 0.10
+        if direction == "long":
+            entry_low, entry_high = price - pull * atr, price + push * atr
+            level = candidate.level_price
+            if level > 0 and 0 <= (price - level) <= max_offset:
+                entry_low = min(entry_low, level)
+                entry_high = max(entry_high, level)
+            # 超出容忍距離的關鍵位代表行情已走遠 → 這張單不可能成交
+            if candidate.kind != "momentum" and level > 0 and (price - level) > max_offset:
+                self.stats["suppressed_entry"] += 1
+                log.debug(
+                    "%s 多單關鍵位 $%.4f 已低於現價 %.2f×ATR，掛單不可能成交，丟棄",
+                    self.symbol,
+                    level,
+                    (price - level) / atr,
+                )
+                return None
+        else:
+            entry_low, entry_high = price - push * atr, price + pull * atr
+            level = candidate.level_price
+            if level > 0 and 0 <= (level - price) <= max_offset:
+                entry_low = min(entry_low, level)
+                entry_high = max(entry_high, level)
+            if candidate.kind != "momentum" and level > 0 and (level - price) > max_offset:
+                self.stats["suppressed_entry"] += 1
+                log.debug(
+                    "%s 空單關鍵位 $%.4f 已高於現價 %.2f×ATR，掛單不可能成交，丟棄",
+                    self.symbol,
+                    level,
+                    (level - price) / atr,
+                )
+                return None
         # --- 距離下限：低波動標的用資產類別地板放寬目標，而不是靜音
         stop_dist = max(self.atr_mult * atr, self.min_sl_pct / 100.0 * price)
         tp1_dist = max(self.tp1_mult * atr, self.min_tp1_pct / 100.0 * price)
@@ -1525,11 +1563,9 @@ class OrderflowEngine:
             log.debug("%s 目標距離異常（%.1f%%），丟棄", self.symbol, tp1_dist / price * 100.0)
             return None
         if direction == "long":
-            entry_low, entry_high = price - zone_below * atr, price + zone_above * atr
             stop_loss = min(price - stop_dist, entry_low - 0.30 * atr)
             tp1, tp2, tp3 = price + tp1_dist, price + tp2_dist, price + tp3_dist
         else:
-            entry_low, entry_high = price - zone_above * atr, price + zone_below * atr
             stop_loss = max(price + stop_dist, entry_high + 0.30 * atr)
             tp1, tp2, tp3 = price - tp1_dist, price - tp2_dist, price - tp3_dist
         signal = OrderflowSignal(
