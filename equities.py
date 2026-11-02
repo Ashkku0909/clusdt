@@ -305,10 +305,46 @@ def format_equity_report(snapshot: dict, analysis: dict | None) -> str:
     return "\n".join(lines)
 
 
-def run_equity_cli(cfg, symbols: list[str], dispatcher=None, dry_run: bool = False) -> int:
+def value_trigger(cfg, snapshot: dict, analysis: dict | None = None) -> tuple[bool, str]:
+    """是否值得花 4 個 Finnhub 呼叫 + 1 個 LLM 去做基本面。
+
+    4H 波段進場完全不需要基本面：估值不會在 4 小時內改變，卻會在每一次例行
+    輪詢時重算一次 13 檔股票。基本面真正有用的只有兩個情境：
+      1. 跌到異常便宜（價值型機會，適合波段底部布局）
+      2. 財報等事件風險（由 headline 提醒，不靠估值）
+    因此預設只在「明顯便宜」時才抓取，其餘用快取或直接略過。
+    """
+    metrics = snapshot.get("metrics") or {}
+    price = _num(snapshot.get("price"))
+    low_52 = _num(metrics.get("52WeekLow"))
+    high_52 = _num(metrics.get("52WeekHigh"))
+    if not price or price <= 0:
+        return False, "無價格"
+    drawdown_pct = float(getattr(cfg, "equity_value_trigger_drawdown_pct", 25.0))
+    from_low_pct = float(getattr(cfg, "equity_value_trigger_from_52w_low_pct", 12.0))
+    if high_52 and high_52 > 0:
+        drawdown = (high_52 - price) / high_52 * 100.0
+        if drawdown >= drawdown_pct:
+            return True, f"自 52 週高點回撤 {drawdown:.1f}%"
+    if low_52 and low_52 > 0:
+        above_low = (price - low_52) / low_52 * 100.0
+        if above_low <= from_low_pct:
+            return True, f"距 52 週低點僅 {above_low:.1f}%"
+    return False, (
+        f"非價值區（距 52 週低點 {((price - low_52) / low_52 * 100.0):.1f}%"
+        f"｜自高點回撤 {((high_52 - price) / high_52 * 100.0):.1f}%）"
+        if low_52 and high_52
+        else "非價值區"
+    )
+
+
+def run_equity_cli(
+    cfg, symbols: list[str], dispatcher=None, dry_run: bool = False, force: bool = False
+) -> int:
     """``--equity``：抓取／快取並輸出股票分析；dispatcher 有值時同時推播。"""
     session = requests.Session()
     reports: list[str] = []
+    skipped = 0
     for symbol in symbols:
         cached = load_cached(cfg, symbol)
         cached_analysis = cached.get("analysis") if cached else None
@@ -319,14 +355,21 @@ def run_equity_cli(cfg, symbols: list[str], dispatcher=None, dry_run: bool = Fal
             log.info("%s 使用快取（%s）", symbol, snapshot.get("fetched_at", "")[:19])
         else:
             snapshot = fetch_equity(session, cfg, symbol)
+            cheap, reason = value_trigger(cfg, snapshot)
+            if not (force or cheap):
+                log.info("%s 略過基本面分析：%s（4H 波段不需要估值）", symbol, reason)
+                skipped += 1
+                continue
             analysis = analyse_equity(cfg, snapshot)
             save_cache(cfg, symbol, snapshot, analysis)
-            log.info("%s 已更新並寫入快取", symbol)
+            log.info("%s 已更新並寫入快取（觸發原因：%s）", symbol, reason if cheap else "--force")
         report = format_equity_report(snapshot, analysis)
         reports.append(report)
         print("\n" + "─" * 64)
         print(report)
         print("─" * 64)
+    if skipped:
+        log.info("共 %d 檔因非價值區而略過（加 --force 可強制全部分析）", skipped)
     if dispatcher is not None:
         for report in reports:
             dispatcher.send_alert(report, dry_run=dry_run)

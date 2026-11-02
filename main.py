@@ -251,6 +251,10 @@ def status() -> dict:
             "breakout_cushion_atr": sample.breakout_cushion_atr,
             "require_context": sample.require_context,
             "context_max_age_sec": sample.context_max_age_sec,
+            "vwap_enabled": sample.enable_vwap,
+            "vwap_sigma_entry": sample.vwap_sigma_entry,
+            "vwap_sigma_stop": sample.vwap_sigma_stop,
+            "vwap_trend_ma": sample.vwap_trend_ma,
         }
     summary["symbols"] = [engine.health() for engine in list(_engines)]
     return {"status": "ok", **summary}
@@ -376,7 +380,13 @@ def main(argv=None) -> int:
 
     if args.equity is not None:
         symbols = [item.upper() for item in args.equity] if args.equity else list(cfg.equity_symbols)
-        return run_equity_cli(cfg, symbols, tools.tg if args.force else None, dry_run=args.dry_run)
+        return run_equity_cli(
+            cfg,
+            symbols,
+            tools.tg if args.force else None,
+            dry_run=args.dry_run,
+            force=args.force,
+        )
 
     if args.news:
         sent = run_news_cycle(cfg, tools.tg, tools.state, dry_run=args.dry_run, limit=args.limit)

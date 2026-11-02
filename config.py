@@ -154,6 +154,14 @@ class Config:
     orderflow_enable_divergence: bool = True
     orderflow_divergence_usd: float = 3_000_000.0
     orderflow_divergence_price_pct: float = 0.10
+    # VWAP ± σ 均值回歸（限價掛單型；預設開啟，回測走查為正）
+    # 回測結論：σ2.8 + SMA200 順勢 + σ 帶掛單（23 檔／750 天，樣本外 +0.4R、PF 1.6）
+    orderflow_enable_vwap: bool = True
+    orderflow_vwap_window: int = 20
+    orderflow_vwap_sigma_entry: float = 2.8
+    orderflow_vwap_sigma_stop: float = 1.0
+    orderflow_vwap_trend_ma: int = 200
+    orderflow_vwap_approach_sigma: float = 0.35
     # 多標的門檻自動校準（依 24h 成交額；每標的獨立）與全域警報預算
     orderflow_auto_calibrate: bool = True
     orderflow_calibration_factor: float = 4.5
@@ -179,6 +187,9 @@ class Config:
         "SNDK",
     )
     equity_cache_ttl_sec: int = 21600
+    # 基本面只在「明顯便宜」時才做（4H 波段進場不需要估值）
+    equity_value_trigger_drawdown_pct: float = 25.0  # 自 52 週高點回撤 ≥ 此值
+    equity_value_trigger_from_52w_low_pct: float = 12.0  # 或距 52 週低點 ≤ 此值
     # Binance 官方公告（上幣／下架／維護）
     binance_news_enabled: bool = True
     binance_news_max_age_hours: int = 12
@@ -186,6 +197,11 @@ class Config:
     # 新聞重要性過濾（DeepSeek Flash；未設金鑰時自動跳過）
     news_importance_filter: bool = True
     news_min_importance: int = 6
+    # 成本控制：新聞只做「會進分析」的事（標題粗筛 → 評分 → 才抓內文與翻譯）
+    news_verifiable_ts_only: bool = True  # 時戳無法驗證 → 直接丟棄，不逐則爬 HTML
+    news_headline_prefilter: bool = True  # 先用標題關鍵字粗筛，再花 LLM 評分
+    news_score_before_body: bool = True  # 先以標題＋摘要評分，通過才拉全文
+    news_max_scrape_per_cycle: int = 6  # 每輪最多拉幾篇全文（保護 trafilatura 與頻寬）
     # CFTC 週度籌碼
     cftc_flow_threshold: int = 0
     cftc_check_interval_sec: int = 1800
@@ -267,6 +283,12 @@ def load_config() -> Config:
         orderflow_absorption_usd=_env_float("ORDERFLOW_ABSORPTION_USD", 3_000_000.0),
         orderflow_absorption_range_pct=_env_float("ORDERFLOW_ABSORPTION_RANGE_PCT", 0.08),
         orderflow_enable_divergence=_env_bool("ORDERFLOW_ENABLE_DIVERGENCE", True),
+        orderflow_enable_vwap=_env_bool("ORDERFLOW_ENABLE_VWAP", True),
+        orderflow_vwap_window=_env_int("ORDERFLOW_VWAP_WINDOW", 20),
+        orderflow_vwap_sigma_entry=_env_float("ORDERFLOW_VWAP_SIGMA_ENTRY", 2.8),
+        orderflow_vwap_sigma_stop=_env_float("ORDERFLOW_VWAP_SIGMA_STOP", 1.0),
+        orderflow_vwap_trend_ma=_env_int("ORDERFLOW_VWAP_TREND_MA", 200),
+        orderflow_vwap_approach_sigma=_env_float("ORDERFLOW_VWAP_APPROACH_SIGMA", 0.35),
         orderflow_divergence_usd=_env_float("ORDERFLOW_DIVERGENCE_USD", 3_000_000.0),
         orderflow_divergence_price_pct=_env_float("ORDERFLOW_DIVERGENCE_PRICE_PCT", 0.10),
         orderflow_auto_calibrate=_env_bool("ORDERFLOW_AUTO_CALIBRATE", True),
@@ -281,11 +303,17 @@ def load_config() -> Config:
             ("GOOGL", "TSLA", "AAPL", "MSFT", "NVDA", "AMZN", "META", "COIN", "HOOD", "SPCX", "CRCL", "MU", "SNDK"),
         ),
         equity_cache_ttl_sec=_env_int("EQUITY_CACHE_TTL_SEC", 21600),
+        equity_value_trigger_drawdown_pct=_env_float("EQUITY_VALUE_TRIGGER_DRAWDOWN_PCT", 25.0),
+        equity_value_trigger_from_52w_low_pct=_env_float("EQUITY_VALUE_TRIGGER_FROM_52W_LOW_PCT", 12.0),
         binance_news_enabled=_env_bool("BINANCE_NEWS_ENABLED", True),
         binance_news_max_age_hours=_env_int("BINANCE_NEWS_MAX_AGE_HOURS", 12),
         binance_news_limit_per_cycle=_env_int("BINANCE_NEWS_LIMIT_PER_CYCLE", 3),
         news_importance_filter=_env_bool("NEWS_IMPORTANCE_FILTER", True),
         news_min_importance=_env_int("NEWS_MIN_IMPORTANCE", 6),
+        news_verifiable_ts_only=_env_bool("NEWS_VERIFIABLE_TS_ONLY", True),
+        news_headline_prefilter=_env_bool("NEWS_HEADLINE_PREFILTER", True),
+        news_score_before_body=_env_bool("NEWS_SCORE_BEFORE_BODY", True),
+        news_max_scrape_per_cycle=_env_int("NEWS_MAX_SCRAPE_PER_CYCLE", 6),
         cftc_flow_threshold=_env_int("CFTC_FLOW_THRESHOLD", 0),
         cftc_check_interval_sec=_env_int("CFTC_CHECK_INTERVAL_SEC", 1800),
     )

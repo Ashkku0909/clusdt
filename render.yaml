@@ -28,6 +28,14 @@ services:
         value: "1"
       - key: NEWS_MIN_IMPORTANCE
         value: "6"
+      - key: NEWS_VERIFIABLE_TS_ONLY
+        value: "1"
+      - key: NEWS_HEADLINE_PREFILTER
+        value: "1"
+      - key: NEWS_SCORE_BEFORE_BODY
+        value: "1"
+      - key: NEWS_MAX_SCRAPE_PER_CYCLE
+        value: "6"
       - key: BINANCE_NEWS_ENABLED
         value: "1"
       - key: BINANCE_NEWS_MAX_AGE_HOURS
@@ -102,6 +110,18 @@ services:
         value: "1"
       - key: ORDERFLOW_ENABLE_DIVERGENCE
         value: "1"
+      - key: ORDERFLOW_ENABLE_VWAP
+        value: "1"
+      - key: ORDERFLOW_VWAP_WINDOW
+        value: "20"
+      - key: ORDERFLOW_VWAP_SIGMA_ENTRY
+        value: "2.8"
+      - key: ORDERFLOW_VWAP_SIGMA_STOP
+        value: "1.0"
+      - key: ORDERFLOW_VWAP_TREND_MA
+        value: "200"
+      - key: ORDERFLOW_VWAP_APPROACH_SIGMA
+        value: "0.35"
       - key: ORDERFLOW_AUTO_CALIBRATE
         value: "1"
       - key: ORDERFLOW_CALIBRATION_FACTOR
@@ -116,6 +136,10 @@ services:
         value: "GOOGL,TSLA,AAPL,MSFT,NVDA,AMZN,META,COIN,HOOD,SPCX,CRCL,MU,SNDK"
       - key: EQUITY_CACHE_TTL_SEC
         value: "21600"
+      - key: EQUITY_VALUE_TRIGGER_DRAWDOWN_PCT
+        value: "25"
+      - key: EQUITY_VALUE_TRIGGER_FROM_52W_LOW_PCT
+        value: "12"
       - key: LOG_LEVEL
         value: "INFO"
       - key: LOOP_INTERVAL_SECONDS

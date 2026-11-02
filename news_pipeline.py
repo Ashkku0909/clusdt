@@ -108,6 +108,39 @@ def _is_stock_noise(paragraph: str) -> bool:
 
 
 # --------------------------------------------------------------------- #
+# 標題粗筛（零成本）：先剔除明顯不可能影響價格的標題，才值得花 LLM 評分
+# --------------------------------------------------------------------- #
+HEADLINE_NOISE_MARKERS = (
+    "how to", "top 5", "top 10", "best ", "why i ", "my portfolio",
+    "price prediction", "technical analysis", "chart of the day", "opinion:",
+    "podcast", "newsletter", "webinar", "sponsored", "coupon", "discount",
+    "reviews", "unboxing", "giveaway", "lottery",
+)
+HEADLINE_SIGNAL_MARKERS = (
+    "opec", "output", "supply", "sanction", "embargo", "attack", "strike",
+    "war", "ceasefire", "inventory", "inventories", "stockpile", "reserve",
+    "eia", "api", "cut", "hike", "shutdown", "force majeure", "pipeline",
+    "refinery", "drilling", "rig", "export", "import", "tariff", "ban",
+    "rate cut", "rate hike", "inflation", "cpi", "ppi", "fomc", "fed ",
+    "earnings", "guidance", "acquire", "acquisition", "merger", "bankruptcy",
+    "lawsuit", "probe", "hack", "exploit", "delist", "listing", "etf",
+    "approval", "halving", "treasury", "stimulus", "default",
+    "減產", "增產", "制裁", "禁運", "襲擊", "停火", "庫存", "儲備", "降息",
+    "升息", "通膨", "財報", "併購", "破產", "下架", "上幣", "核准",
+)
+
+
+def headline_prefilter(title: str) -> bool:
+    """便宜的關鍵字粗筛：明顯是教學／導購／預測類的標題直接丟棄。"""
+    lowered = (title or "").lower()
+    if not lowered.strip():
+        return False
+    if any(marker in lowered for marker in HEADLINE_NOISE_MARKERS):
+        return any(marker in lowered for marker in HEADLINE_SIGNAL_MARKERS)
+    return True
+
+
+# --------------------------------------------------------------------- #
 # 抓取（含 Marketaux 配額節流）
 # --------------------------------------------------------------------- #
 def collect_fresh(cfg: Config, state: StateStore, persist: bool = True) -> list[NewsItem]:
@@ -152,14 +185,21 @@ class FreshNews:
     html: str | None = None
 
 
-def resolve_published(item: NewsItem, cfg: Config) -> tuple[datetime | None, str | None]:
-    """解析發布時間：先信賴來源欄位（需帶時區）；無效時爬取文章 meta 標籤。
+def resolve_published(
+    item: NewsItem, cfg: Config, verify_by_fetch: bool = True
+) -> tuple[datetime | None, str | None]:
+    """解析發布時間：先信賴來源欄位（需帶時區）；無效時可選擇爬取文章 meta。
 
     回傳 (UTC 時間, 已下載的 HTML 或 None)；無法驗證時時間為 None。
+
+    verify_by_fetch=False 時不再逐則下載 HTML（舊行為：來源缺時戳就抓整頁，
+    一輪 140+ 則新聞就是 140+ 次 HTTP；實測這些文章幾乎全部都在時間窗外）。
     """
     published = parse_iso_utc(item.sort_key or "")
     if published:
         return published, None
+    if not verify_by_fetch:
+        return None, None
     html_text = fetch_url_html(item.url, cfg)
     if not html_text:
         return None, None
@@ -169,18 +209,32 @@ def resolve_published(item: NewsItem, cfg: Config) -> tuple[datetime | None, str
 def select_fresh(items: list[NewsItem], cfg: Config) -> list[FreshNews]:
     """僅保留時間戳可驗證且發布時間在窗口內的新聞（新 → 舊）。"""
     now = datetime.now(timezone.utc)
+    verify_by_fetch = not getattr(cfg, "news_verifiable_ts_only", True)
     fresh: list[FreshNews] = []
+    unverified = 0
     for item in items:
-        published, html_text = resolve_published(item, cfg)
+        # 先用來源時戳做零成本判斷，只有「沒有時戳」的才可能需要爬 HTML
+        published = parse_iso_utc(item.sort_key or "")
+        if published is not None:
+            age = (now - published).total_seconds() / 60.0
+            if age < -5:  # 時鐘偏差保護
+                continue
+            if age > cfg.news_max_age_minutes:
+                continue
+            fresh.append(FreshNews(item=item, published=published, age_minutes=age))
+            continue
+        published, html_text = resolve_published(item, cfg, verify_by_fetch=verify_by_fetch)
         if published is None:
-            log.info("時間戳無法驗證（來源缺漏且 meta 不可用），丟棄：%s", item.title[:60])
+            unverified += 1
             continue
         age = (now - published).total_seconds() / 60.0
-        if age < -5:  # 時鐘偏差保護
+        if age < -5:
             continue
         if age > cfg.news_max_age_minutes:
             continue
         fresh.append(FreshNews(item=item, published=published, age_minutes=age, html=html_text))
+    if unverified:
+        log.info("時間戳無法驗證而丟棄 %d 則（未逐則爬 HTML）", unverified)
     fresh.sort(key=lambda row: row.published, reverse=True)
     return fresh
 
@@ -517,6 +571,18 @@ def run_news_cycle(
     load_translation_cache(state)
     recent_titles: list[str] = []
     sent = 0
+    scrapes = 0
+    max_scrapes = int(getattr(cfg, "news_max_scrape_per_cycle", 6))
+    score_first = bool(getattr(cfg, "news_score_before_body", True))
+    prefilter_on = bool(getattr(cfg, "news_headline_prefilter", True))
+
+    def _mark_filtered() -> None:
+        if dry_run:
+            return
+        stamp = datetime.now(timezone.utc).isoformat()
+        for key in keys:
+            filtered[key] = stamp
+
     for entry in fresh:
         if sent >= limit:
             break
@@ -525,16 +591,49 @@ def run_news_cycle(
         if any(key in seen for key in keys) or any(key in filtered for key in keys):
             continue
 
-        log.info("處理新聞：%s（%.1f 分鐘前）", item.title[:70], entry.age_minutes)
-        paragraphs = scrape_article(item.url, cfg, cfg.article_paragraph_limit, preloaded_html=entry.html)
+        # --- 步驟 1：零成本標題粗筛（明顯教學／導購／預測類不必浪費 LLM）---
+        if prefilter_on and not headline_prefilter(item.title):
+            log.info("標題粗筛剔除：%s", item.title[:60])
+            _mark_filtered()
+            continue
+
+        # --- 步驟 2：先用標題＋來源摘要評分（不拉全文）---
+        verdict = None
+        if cfg.news_importance_filter and cfg.deepseek_api_key:
+            if score_first:
+                verdict = score_news(
+                    cfg, item.title, item.summary or "", recent_headlines=recent_titles
+                )
+                if verdict is not None and verdict.score < cfg.news_min_importance:
+                    log.info(
+                        "重要性 %d/10 < %d（%s｜%s），粗筛過濾（省下全文抓取）：%s",
+                        verdict.score,
+                        cfg.news_min_importance,
+                        category_label(verdict.category),
+                        verdict.reason,
+                        item.title[:60],
+                    )
+                    _mark_filtered()
+                    continue
+
+        # --- 步驟 3：通過才拉取全文（僅供卡片內容，不再影響是否推送）---
+        paragraphs: list[str] = []
+        if scrapes < max_scrapes:
+            scrapes += 1
+            log.info("處理新聞：%s（%.1f 分鐘前）", item.title[:70], entry.age_minutes)
+            paragraphs = scrape_article(
+                item.url, cfg, cfg.article_paragraph_limit, preloaded_html=entry.html
+            )
         if not paragraphs and item.summary.strip():
             log.info("內文擷取失敗，改用來源摘要（feed summary）")
             paragraphs = [item.summary.strip()]
         paragraphs = [_trim_english_to_sentence(p) for p in paragraphs if p.strip()]
 
-        verdict = None
-        if cfg.news_importance_filter and cfg.deepseek_api_key:
-            verdict = score_news(cfg, item.title, " ".join(paragraphs), recent_headlines=recent_titles)
+        # --- 步驟 4：若沒有先評分，這裡補評（標題＋全文）---
+        if verdict is None and cfg.news_importance_filter and cfg.deepseek_api_key:
+            verdict = score_news(
+                cfg, item.title, " ".join(paragraphs), recent_headlines=recent_titles
+            )
             if verdict is None:
                 log.info("重要性評分不可用（fail-open，照常推播）")
             elif verdict.score < cfg.news_min_importance:
@@ -546,10 +645,7 @@ def run_news_cycle(
                     verdict.reason,
                     item.title[:60],
                 )
-                if not dry_run:
-                    stamp = datetime.now(timezone.utc).isoformat()
-                    for key in keys:
-                        filtered[key] = stamp
+                _mark_filtered()
                 continue
             else:
                 log.info(
@@ -558,6 +654,13 @@ def run_news_cycle(
                     category_label(verdict.category),
                     verdict.reason,
                 )
+        elif verdict is not None:
+            log.info(
+                "重要性 %d/10（%s）：%s",
+                verdict.score,
+                category_label(verdict.category),
+                verdict.reason,
+            )
 
         translated = translate_batch([item.title, *paragraphs], cfg)
         title_zh = translated[0]
