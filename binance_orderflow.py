@@ -100,6 +100,10 @@ FALLBACK_BASE_ASSETS: tuple[str, ...] = ("CL", "OIL", "WTI", "BRENT", "CRUDE")
 BASELINE_DIR = Path(__file__).resolve().parent / "data" / "baseline"
 BASELINE_MAX_AGE_SEC = 12 * 3600.0
 SNAPSHOT_CACHE_MAX_AGE_SEC = 6 * 3600.0
+# 倉庫種子檔沒有磁碟快取那麼新鮮（每次部署都會被清空），但沒有它就完全盲發；
+# 放寬到 7 天，搭配「WS 成交即時更新 24h 高低」與評級降分控制風險。
+BASELINE_SEED_MAX_AGE_SEC = 7 * 86400.0
+SNAPSHOT_SEED_MAX_AGE_SEC = 7 * 86400.0
 # 部署到新機器（/tmp 重設）時，若沒有任何快取就用倉庫內的種子檔（由 --dump-baseline 產生）
 BASELINE_SEED_PATH = Path(__file__).resolve().parent / "baseline_seed.json"
 CONTEXT_SEED_PATH = Path(__file__).resolve().parent / "context_seed.json"
@@ -812,6 +816,7 @@ class OrderflowEngine:
         """讀回磁碟 ATR 與 24h 高低點（先找本機快取，再找倉庫種子檔）。"""
         now = datetime.now(timezone.utc)
         payload: dict | None = None
+        from_seed = False
         for path, is_seed in ((self._baseline_path(), False), (BASELINE_SEED_PATH, True)):
             try:
                 raw = json.loads(path.read_text(encoding="utf-8"))
@@ -820,9 +825,12 @@ class OrderflowEngine:
             candidate = raw.get(self.symbol) if is_seed else raw
             if isinstance(candidate, dict):
                 payload = candidate
+                from_seed = is_seed
                 break
         if payload is None:
             return
+        atr_limit = BASELINE_SEED_MAX_AGE_SEC if from_seed else BASELINE_MAX_AGE_SEC
+        snap_limit = SNAPSHOT_SEED_MAX_AGE_SEC if from_seed else SNAPSHOT_CACHE_MAX_AGE_SEC
         if not self.atr or self.atr <= 0:
             try:
                 saved = datetime.fromisoformat(payload["saved_at"])
@@ -833,9 +841,15 @@ class OrderflowEngine:
                 if saved.tzinfo is None:
                     saved = saved.replace(tzinfo=timezone.utc)
                 age = (now - saved).total_seconds()
-                if atr > 0 and age <= BASELINE_MAX_AGE_SEC:
+                if atr > 0 and age <= atr_limit:
                     self.atr = atr
-                    log.info("%s 沿用磁碟 ATR %.4f（%.0f 分鐘前）", self.symbol, atr, age / 60.0)
+                    log.info(
+                        "%s 沿用%s ATR %.4f（%.0f 分鐘前）",
+                        self.symbol,
+                        "種子檔" if from_seed else "磁碟",
+                        atr,
+                        age / 60.0,
+                    )
         if self.snapshot is None and isinstance(payload.get("snapshot"), dict):
             raw = payload["snapshot"]
             try:
@@ -843,7 +857,7 @@ class OrderflowEngine:
                 if fetched.tzinfo is None:
                     fetched = fetched.replace(tzinfo=timezone.utc)
                 age = (now - fetched).total_seconds()
-                if age <= SNAPSHOT_CACHE_MAX_AGE_SEC:
+                if age <= snap_limit:
                     self.snapshot = MarketSnapshot(
                         symbol=self.symbol,
                         last_price=float(raw["last_price"]),
@@ -1122,11 +1136,11 @@ class OrderflowEngine:
         )
 
     def _context_allowed_age(self) -> float:
-        """限流期間放寬宏觀（4h/1d）容忍度到 6 小時；否則 45 分鐘。"""
+        """限流期間放寬宏觀（4h/1d）容忍度到 24 小時；否則 45 分鐘。"""
         if not self.require_context:
             return float("inf")
         if self.gate.blocked() or self.gate.recent_ban(7200.0):
-            return max(self.context_max_age_sec, 21600.0)
+            return max(self.context_max_age_sec, 86400.0)
         return self.context_max_age_sec
 
     def _effective_context(self) -> tuple[MarketContext | None, float | None]:

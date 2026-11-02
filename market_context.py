@@ -445,6 +445,10 @@ def grade_signal(
     if context_age is not None and context_age > STALE_CONTEXT_PENALTY_MIN * 60:
         score -= 10
         reasons.append(f"上下文 {context_age / 60:.0f} 分鐘前")
+    # 宏觀逾 6 小時（限流期沿用種子）→ 額外扣分，只讓強訊號通過
+    if context_age is not None and context_age > 6 * 3600:
+        score -= 15
+        reasons.append("宏觀上下文逾 6 小時")
 
     score = max(0, min(100, int(round(score))))
     if counter_trend or cvd_veto:

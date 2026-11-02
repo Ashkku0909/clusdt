@@ -384,7 +384,7 @@ def run_cftc_cycle(cfg, dispatcher, state, dry_run: bool = False, force: bool = 
             release_at = datetime.combine(report_day + timedelta(days=3), datetime.min.time(), tzinfo=timezone.utc)
             release_at = release_at.replace(hour=19, minute=30)
             release_age_hours = (now - release_at).total_seconds() / 3600.0
-        if not already_sent and release_age_hours > 36 and not _in_release_window(now):
+        if not already_sent and release_age_hours > 72 and not _in_release_window(now):
             log.info(
                 "CFTC：新啟動且非發布窗口（報告日 %s 已發布 %.0f 小時），暫不補發；用 --cftc --force 可手動推送",
                 position.report_date,
