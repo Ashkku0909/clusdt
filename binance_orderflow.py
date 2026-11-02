@@ -968,6 +968,7 @@ class OrderflowEngine:
                     )
                 self._next_refresh_at = time.monotonic() + delay
                 self._load_baseline()
+                self._restore_cached_context()
                 return
             self.snapshot = snapshot
             self.atr = atr
@@ -1216,14 +1217,18 @@ class OrderflowEngine:
                 self.symbol,
                 age / 60.0,
             )
-        if age > self.snapshot_max_age_sec:
+        # 熔斷期間放寬基準容忍度（種子檔有效期），否則 7 天種子永遠進不了訊號流程
+        max_age = self.snapshot_max_age_sec
+        if self.gate.blocked() or self.gate.recent_ban(7200.0):
+            max_age = max(max_age, SNAPSHOT_SEED_MAX_AGE_SEC)
+        if age > max_age:
             self.stats["suppressed_stale"] += 1
             if time.time() - self._last_stale_warn >= 300:
                 self._last_stale_warn = time.time()
                 log.warning(
                     "行情基準已過期 %.0f 秒（> %d 秒），暫停發送新訊號",
                     age,
-                    int(self.snapshot_max_age_sec),
+                    int(max_age),
                 )
             return None
 
