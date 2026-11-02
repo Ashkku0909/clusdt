@@ -2013,6 +2013,15 @@ class OrderflowEngine:
         ok = await asyncio.to_thread(self.dispatcher.send_alert, text, self.dry_run)
         if not ok:
             log.warning("訂單流警報發送失敗（%s %s）", self.symbol, signal.direction)
+            return
+        # 寫入訊號帳本：沒有紀錄就沒有勝率，沒有勝率就沒法定價
+        if not self.dry_run:
+            try:
+                from signal_ledger import record_signal
+
+                await asyncio.to_thread(record_signal, signal)
+            except Exception as exc:  # noqa: BLE001 - 帳本失敗绝不可阻塞警報
+                log.warning("訊號帳本寫入失敗（不影響警報）：%s", exc)
 
     def health(self) -> dict:
         """健康快照（供 /status 與心跳日誌）。"""

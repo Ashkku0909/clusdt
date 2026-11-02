@@ -302,6 +302,11 @@ def _parse_args(argv=None) -> argparse.Namespace:
         help="股票基本面／新聞分析（預設讀 EQUITY_SYMBOLS；加 --force 同步推播 Telegram）",
     )
     parser.add_argument("--dry-run", action="store_true", help="只顯示訊息，不實際發送、不更新狀態")
+    parser.add_argument(
+        "--verify-signals",
+        action="store_true",
+        help="驗證訊號帳本內每張卡片的實際結果（TP/止損/未成交）並輸出勝率",
+    )
     parser.add_argument("--force", action="store_true", help="忽略門檻與去重（搭配 --orderflow / --cftc）")
     return parser.parse_args(argv)
 
@@ -386,6 +391,13 @@ def main(argv=None) -> int:
             tools.tg if args.force else None,
             dry_run=args.dry_run,
             force=args.force,
+        )
+
+    if args.verify_signals:
+        from signal_ledger import main as ledger_main
+
+        return ledger_main(
+            ["--verify", "--force"] if args.force else ["--verify"]
         )
 
     if args.news:
