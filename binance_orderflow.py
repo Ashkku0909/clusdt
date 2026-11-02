@@ -850,6 +850,11 @@ class OrderflowEngine:
                         atr,
                         age / 60.0,
                     )
+                    if from_seed and age > 3 * 86400:
+                        log.warning(
+                            "種子檔已 %.1f 天未更新，建議執行 `python main.py --dump-baseline` 重新生成",
+                            age / 86400.0,
+                        )
         if self.snapshot is None and isinstance(payload.get("snapshot"), dict):
             raw = payload["snapshot"]
             try:
