@@ -125,6 +125,12 @@ Context is cached to `data/context/{SYMBOL}.json` (6h) and reused during REST ou
 
 ## 9. Operations
 - `GET /health` → `{"status":"ok"}` (cheap, no upstream calls).
+- `GET /status` → engine health JSON: `engines`, `ws_connected`, `trades_total`, `signals_total`, `rest_blocked_sec`, `missing_baseline`, `settings` (live ATR interval / TP-SL multiples / VWAP params / filters), plus per-symbol `price`, `atr`, `snapshot_age_sec`, `context_age_sec`, `vwap`, `vwap_sigma`, `vwap_upper`, `vwap_lower`, `vwap_trend`, `vwap_signals`.
+- **`signals_total` resets on every restart** — it is a process counter, not a history. The durable record is `signals_ledger.json`.
+- **Signal ledger** (`signal_ledger.py`): every successfully dispatched card is appended to `signals_ledger.json`, which is **committed to git** so Render's ephemeral disk cannot lose it.
+  - `python main.py --verify-signals` replays each entry against post-send 4H klines → `tp1/tp2/tp3/sl/expired/partial` with tiered-exit R accounting (TP1 50% → SL to breakeven, TP2 30%, TP3 20%).
+  - Deliberately conservative: same-bar stop beats target, and an unfilled limit order is marked `expired` and **excluded** from win rate rather than counted as a loss.
+  - `python signal_ledger.py --check SYMBOL dir ISO_TIME entry stop tp1 tp2 tp3 [limit|market]` scores any past card you paste in, with no ledger entry needed.
 - `GET /status` → engine health JSON: `engines`, `ws_connected`, `trades_total`, `signals_total`, `rest_blocked_sec`, `missing_baseline`, `settings` (live ATR interval / TP-SL multiples / filters), plus per-symbol `price`, `atr`, `snapshot_age_sec`, `context_age_sec`.
 - Heartbeat log every 5 min: `引擎心跳：WS x/23 已連線｜成交累計 …｜訊號累計 …｜REST 熔斷剩餘 …`.
 - CLIs: `--serve`, `--once`, `--loop`, `--news`, `--binance-news`, `--orderflow`, `--cftc`, `--equity`, `--health`, `--ping`, `--ws-test N`, `--dump-baseline`.
@@ -146,8 +152,7 @@ Expected volume: a handful of swing cards per day, each with a 3-tier exit plan 
 - Backtesting is only meaningful with the three bias controls in §4b. A naive band-touch backtest reports −0.27R for a strategy that is actually +0.36R, purely from look-ahead in the indicators and same-bar limit fills.
 
 ## 12. Sensible next steps (not yet built)
-- Signal ledger + automatic win-rate report (biggest credibility win for a paid channel).
-- Follow-up "TP1 hit / SL hit" edit messages so subscribers see outcomes.
+- Follow-up "TP1 hit / SL hit" edit messages so subscribers see outcomes (the ledger now knows the outcome; nothing pushes it yet).
 - **Forward-test the live `vwap` kind against the backtest** — the code path is validated offline (`check_vwap.py`), but no production signal has fired yet; compare realized R against the +0.4R expectation before trusting it with position size.
 - Optional BTC/SOL-specific tuning; more TradFi perps (XPT, XPD, COPPER, NATGAS, QQQ, SPY).
 - Simplified Chinese (简体) variant of the cards if the audience shifts.
