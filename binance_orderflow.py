@@ -100,10 +100,13 @@ FALLBACK_BASE_ASSETS: tuple[str, ...] = ("CL", "OIL", "WTI", "BRENT", "CRUDE")
 BASELINE_DIR = Path(__file__).resolve().parent / "data" / "baseline"
 BASELINE_MAX_AGE_SEC = 12 * 3600.0
 SNAPSHOT_CACHE_MAX_AGE_SEC = 6 * 3600.0
-# 倉庫種子檔沒有磁碟快取那麼新鮮（每次部署都會被清空），但沒有它就完全盲發；
-# 放寬到 7 天，搭配「WS 成交即時更新 24h 高低」與評級降分控制風險。
-BASELINE_SEED_MAX_AGE_SEC = 7 * 86400.0
-SNAPSHOT_SEED_MAX_AGE_SEC = 7 * 86400.0
+# 倉庫種子檔沒有磁碟快取那麼新鮮（每次部署都會被清空），但沒有它就完全盲發。
+# 2026-11-11 事故：種子 10 天未更新，超過 7 天上限 → 23 檔全部 missing_baseline
+# → process_trade 直接 return → 連續多日零訊號（訂閱者以為「被關了」）。
+# 現在改為 30 天硬上限 + 「超過 7 天只發 A 級」的漸進降級：寧可少發、不可全盲。
+BASELINE_SEED_MAX_AGE_SEC = 30 * 86400.0
+SNAPSHOT_SEED_MAX_AGE_SEC = 30 * 86400.0
+SEED_STALE_DAYS = 7.0  # 超過此天數 → 訊號門檻提高到 A 級（82 分）
 # 部署到新機器（/tmp 重設）時，若沒有任何快取就用倉庫內的種子檔（由 --dump-baseline 產生）
 BASELINE_SEED_PATH = Path(__file__).resolve().parent / "baseline_seed.json"
 CONTEXT_SEED_PATH = Path(__file__).resolve().parent / "context_seed.json"
@@ -831,6 +834,7 @@ class OrderflowEngine:
         self._refresh_failures = 0
         self._last_stale_warn = 0.0
         self._baseline_warned = False
+        self._seed_age_days: float = 0.0  # >SEED_STALE_DAYS 時訊號只發 A 級
         self._next_context_at = 0.0
         # 健康監控（/status 與心跳日誌用）
         self._connected = False
@@ -916,75 +920,100 @@ class OrderflowEngine:
             log.debug("%s 基準快取寫入失敗：%s", self.symbol, exc)
 
     def _load_baseline(self) -> None:
-        """讀回磁碟 ATR 與 24h 高低點（先找本機快取，再找倉庫種子檔）。"""
+        """讀回 ATR 與 24h 高低點（先找本機快取，再找倉庫種子檔）。
+
+        2026-11-11 事故（第二個獨立 bug）：
+        舊版只要「找到一個 dict」就 break，就算那個來源全部欄位過期也照樣 break，
+        於是「9 天前的磁碟快取」會擋住「剛剛生成的種子檔」，結果 ATR 與高低點
+        都是 None → 完全不可能出訊號。現在改成：一個來源若沒有提供任何可用資料，
+        就繼續往下找，而不是盲目接受第一個檔案。
+        """
         now = datetime.now(timezone.utc)
-        payload: dict | None = None
-        from_seed = False
+        need_atr = not self.atr or self.atr <= 0
+        need_snap = self.snapshot is None
+        if not (need_atr or need_snap):
+            return
         for path, is_seed in ((self._baseline_path(), False), (BASELINE_SEED_PATH, True)):
             try:
                 raw = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            candidate = raw.get(self.symbol) if is_seed else raw
-            if isinstance(candidate, dict):
-                payload = candidate
-                from_seed = is_seed
-                break
-        if payload is None:
-            return
-        atr_limit = BASELINE_SEED_MAX_AGE_SEC if from_seed else BASELINE_MAX_AGE_SEC
-        snap_limit = SNAPSHOT_SEED_MAX_AGE_SEC if from_seed else SNAPSHOT_CACHE_MAX_AGE_SEC
-        if not self.atr or self.atr <= 0:
-            try:
-                saved = datetime.fromisoformat(payload["saved_at"])
-                atr = float(payload["atr"])
-            except (KeyError, TypeError, ValueError):
-                saved, atr = None, 0.0
-            if saved is not None:
-                if saved.tzinfo is None:
-                    saved = saved.replace(tzinfo=timezone.utc)
-                age = (now - saved).total_seconds()
-                if atr > 0 and age <= atr_limit:
-                    self.atr = atr
-                    log.info(
-                        "%s 沿用%s ATR %.4f（%.0f 分鐘前）",
-                        self.symbol,
-                        "種子檔" if from_seed else "磁碟",
-                        atr,
-                        age / 60.0,
-                    )
-                    if from_seed and age > 3 * 86400:
-                        log.warning(
-                            "種子檔已 %.1f 天未更新，建議執行 `python main.py --dump-baseline` 重新生成",
+            payload = raw.get(self.symbol) if is_seed else raw
+            if not isinstance(payload, dict):
+                continue
+            label = "種子檔" if is_seed else "磁碟"
+            atr_limit = BASELINE_SEED_MAX_AGE_SEC if is_seed else BASELINE_MAX_AGE_SEC
+            snap_limit = SNAPSHOT_SEED_MAX_AGE_SEC if is_seed else SNAPSHOT_CACHE_MAX_AGE_SEC
+            applied = False
+
+            if need_atr and not self.atr:
+                try:
+                    saved = datetime.fromisoformat(payload["saved_at"])
+                    atr = float(payload["atr"])
+                except (KeyError, TypeError, ValueError):
+                    saved, atr = None, 0.0
+                if saved is not None:
+                    if saved.tzinfo is None:
+                        saved = saved.replace(tzinfo=timezone.utc)
+                    age = (now - saved).total_seconds()
+                    if atr > 0 and age <= atr_limit:
+                        self.atr = atr
+                        if is_seed:
+                            self._seed_age_days = age / 86400.0
+                        log.info(
+                            "%s 沿用%s ATR %.4f（%.1f 天前）",
+                            self.symbol,
+                            label,
+                            atr,
                             age / 86400.0,
                         )
-        if self.snapshot is None and isinstance(payload.get("snapshot"), dict):
-            raw = payload["snapshot"]
-            try:
-                fetched = datetime.fromisoformat(raw["fetched_at"])
-                if fetched.tzinfo is None:
-                    fetched = fetched.replace(tzinfo=timezone.utc)
-                age = (now - fetched).total_seconds()
-                if age <= snap_limit:
-                    self.snapshot = MarketSnapshot(
-                        symbol=self.symbol,
-                        last_price=float(raw["last_price"]),
-                        high_24h=float(raw["high_24h"]),
-                        low_24h=float(raw["low_24h"]),
-                        quote_volume_24h=float(raw.get("quote_volume_24h") or 0.0),
-                        trade_count_24h=int(raw.get("trade_count_24h") or 0),
-                        fetched_at=fetched,
-                    )
-                    self.apply_calibration(self.snapshot)
-                    log.info(
-                        "%s 沿用磁碟 24h 高低點 %.4f–%.4f（%.0f 分鐘前）",
-                        self.symbol,
-                        self.snapshot.low_24h,
-                        self.snapshot.high_24h,
-                        age / 60.0,
-                    )
-            except (KeyError, TypeError, ValueError):
-                pass
+                        if is_seed and age > SEED_STALE_DAYS * 86400.0:
+                            log.warning(
+                                "%s 種子檔已 %.1f 天未更新；為避免發錯水平，此標的只發 A 級訊號。"
+                                "請在有網路時執行 `python main.py --dump-baseline` 重新生成並提交",
+                                self.symbol,
+                                age / 86400.0,
+                            )
+                        elif is_seed and age > 3 * 86400.0:
+                            log.warning(
+                                "種子檔已 %.1f 天未更新，建議執行 `python main.py --dump-baseline` 重新生成",
+                                age / 86400.0,
+                            )
+                        applied = True
+
+            if need_snap and self.snapshot is None and isinstance(payload.get("snapshot"), dict):
+                block = payload["snapshot"]
+                try:
+                    fetched = datetime.fromisoformat(block["fetched_at"])
+                    if fetched.tzinfo is None:
+                        fetched = fetched.replace(tzinfo=timezone.utc)
+                    age = (now - fetched).total_seconds()
+                    if age <= snap_limit:
+                        self.snapshot = MarketSnapshot(
+                            symbol=self.symbol,
+                            last_price=float(block["last_price"]),
+                            high_24h=float(block["high_24h"]),
+                            low_24h=float(block["low_24h"]),
+                            quote_volume_24h=float(block.get("quote_volume_24h") or 0.0),
+                            trade_count_24h=int(block.get("trade_count_24h") or 0),
+                            fetched_at=fetched,
+                        )
+                        self.apply_calibration(self.snapshot)
+                        log.info(
+                            "%s 沿用%s 24h 高低點 %.4f–%.4f（%.1f 小時前）",
+                            self.symbol,
+                            label,
+                            self.snapshot.low_24h,
+                            self.snapshot.high_24h,
+                            age / 3600.0,
+                        )
+                        applied = True
+                except (KeyError, TypeError, ValueError):
+                    pass
+
+            if applied:
+                return
+            # 這個來源完全無效（例如磁碟快取太舊）→ 繼續找種子檔
 
     def resolve(self) -> str:
         """確定並記住實際可用的合約代碼。"""
@@ -1095,6 +1124,16 @@ class OrderflowEngine:
             )
         finally:
             self._refresh_lock.release()
+
+    def _effective_min_grade(self) -> str:
+        """種子檔過期時提高門檻到 A：舊的 24h 高低點只能當參考，不配發普通訊號。
+
+        這比「整檔消失」好得多——全盲會讓頻道直接停擺（訂閱者會以為機器人掛了），
+        而 A 級門檻（82 分）配合 1d/4h 順向 + CVD 同向，已經能擋掉大部分噪音。
+        """
+        if self._seed_age_days > SEED_STALE_DAYS:
+            return "A"
+        return self.min_grade
 
     def _kline_limit(self) -> int:
         """K 線根數：ATR 需要 period+48；VWAP 策略還要 SMA200 與 20 根 σ 視窗。"""
@@ -1689,9 +1728,9 @@ class OrderflowEngine:
         score, grade, reasons = grade_signal(
             self.context, direction, candidate.kind, context_age=context_age
         )
-        if GRADE_RANK.get(grade, 1) < GRADE_RANK.get(self.min_grade, 0):
+        if GRADE_RANK.get(grade, 1) < GRADE_RANK.get(self._effective_min_grade(), 0):
             self.stats["suppressed_grade"] += 1
-            log.debug("評級 %s（%d 分）低於門檻 %s，壓制", grade, score, self.min_grade)
+            log.debug("評級 %s（%d 分）低於門檻 %s，壓制", grade, score, self._effective_min_grade())
             return None
         # 技術面不可用時，量價背離沒有參考點（純靠 TA 反向）→ 不發；
         # 其餘訊號需流量 >= 動能門檻（約 2 倍窗口）才發，避免限流期間刷低質量單
@@ -2043,6 +2082,8 @@ class OrderflowEngine:
             "price": round(self.snapshot.last_price, 6) if self.snapshot is not None else None,
             "atr": round(self.atr, 6) if self.atr else None,
             "context_age_sec": context_age,
+            "seed_age_days": round(self._seed_age_days, 1) if self._seed_age_days else 0.0,
+            "min_grade_effective": self._effective_min_grade(),
             "vwap": round(self.vwap, 6) if self.vwap else None,
             "vwap_sigma": round(self.vwap_sigma, 6) if self.vwap_sigma else None,
             "vwap_upper": (

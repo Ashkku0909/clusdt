@@ -1,4 +1,4 @@
-# Render Blueprint（Free Web Service）
+﻿# Render Blueprint（Free Web Service）
 # 使用方式：Render Dashboard → New → Blueprint → 連接本 Repo，即自動建立服務。
 # 注意：免費方案閒置 15 分鐘會休眠，請以 UptimeRobot 定時 ping `/health` 保持喚醒。
 services:
@@ -49,7 +49,7 @@ services:
       - key: BINANCE_SYMBOL
         value: "CLUSDT"
       - key: BINANCE_SYMBOLS
-        value: "CLUSDT,BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,LINKUSDT,ENAUSDT,XAUUSDT,XAGUSDT,BNBUSDT,COINUSDT,HOODUSDT,SPCXUSDT,CRCLUSDT,MUUSDT,SNDKUSDT,NVDAUSDT,MSFTUSDT,AAPLUSDT,AMZNUSDT,METAUSDT,GOOGLUSDT,TSLAUSDT"
+        value: "BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,XAUUSDT,XAGUSDT,CLUSDT"
       - key: ORDERFLOW_BLOCK_USD
         value: "500000"
       - key: ORDERFLOW_WINDOW_USD
@@ -132,16 +132,6 @@ services:
         value: "20"
       - key: ORDERFLOW_MIN_GRADE
         value: "B"
-      - key: ORDERFLOW_ENABLE_EQUITIES
-        value: "1"
-      - key: EQUITY_SYMBOLS
-        value: "GOOGL,TSLA,AAPL,MSFT,NVDA,AMZN,META,COIN,HOOD,SPCX,CRCL,MU,SNDK"
-      - key: EQUITY_CACHE_TTL_SEC
-        value: "21600"
-      - key: EQUITY_VALUE_TRIGGER_DRAWDOWN_PCT
-        value: "25"
-      - key: EQUITY_VALUE_TRIGGER_FROM_52W_LOW_PCT
-        value: "12"
       - key: LOG_LEVEL
         value: "INFO"
       - key: LOOP_INTERVAL_SECONDS

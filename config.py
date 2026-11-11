@@ -54,23 +54,31 @@ def _env_list(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
 
 
 DEFAULT_SYMBOLS: tuple[str, ...] = (
-    "CLUSDT",
+    # 訂閱者反饋：只留流動性最好的標的（門檻約 24h 成交額 6 億美元以上）。
+    # 23 → 8 檔同時降低 Render 免費層的 CPU 與 REST 壓力（418 的主因之一），
+    # 也讓每張訊號的滑價可控 —— 流動性差的合約「抓不住、容易反轉」。
+    # 排序：幣 → 貴金屬 → 能源。
     "BTCUSDT",
     "ETHUSDT",
     "SOLUSDT",
     "XRPUSDT",
-    "LINKUSDT",
-    "ENAUSDT",
+    "BNBUSDT",
     "XAUUSDT",
     "XAGUSDT",
-    "BNBUSDT",
+    "CLUSDT",
+)
+
+# 曾被納入但流動性不足／訂閱者明確要求不做的標的（可用 BINANCE_SYMBOLS 覆寫加回）
+RETIRED_SYMBOLS: tuple[str, ...] = (
+    "LINKUSDT",
+    "ENAUSDT",
+    # 股票永續：訂閱者反饋「股票先不碰」，且盤前盤後流動性斷層造成假突破
     "COINUSDT",
     "HOODUSDT",
     "SPCXUSDT",
     "CRCLUSDT",
     "MUUSDT",
     "SNDKUSDT",
-    # Magnificent 7（各自獨立合約）
     "NVDAUSDT",
     "MSFTUSDT",
     "AAPLUSDT",
@@ -169,27 +177,6 @@ class Config:
     orderflow_max_window_usd: float = 12_000_000.0
     orderflow_max_alerts_per_hour: int = 20
     orderflow_min_grade: str = "B"  # A/B/C；C = 不過濾
-    orderflow_enable_equities: bool = True  # 0 = 靜音股票永續（只留幣/金屬/能源）
-    # 股票基本面分析（Finnhub + DeepSeek；快取於 data/equities）
-    equity_symbols: tuple[str, ...] = (
-        "GOOGL",
-        "TSLA",
-        "AAPL",
-        "MSFT",
-        "NVDA",
-        "AMZN",
-        "META",
-        "COIN",
-        "HOOD",
-        "SPCX",
-        "CRCL",
-        "MU",
-        "SNDK",
-    )
-    equity_cache_ttl_sec: int = 21600
-    # 基本面只在「明顯便宜」時才做（4H 波段進場不需要估值）
-    equity_value_trigger_drawdown_pct: float = 25.0  # 自 52 週高點回撤 ≥ 此值
-    equity_value_trigger_from_52w_low_pct: float = 12.0  # 或距 52 週低點 ≤ 此值
     # Binance 官方公告（上幣／下架／維護）
     binance_news_enabled: bool = True
     binance_news_max_age_hours: int = 12
@@ -297,14 +284,6 @@ def load_config() -> Config:
         orderflow_max_window_usd=_env_float("ORDERFLOW_MAX_WINDOW_USD", 12_000_000.0),
         orderflow_max_alerts_per_hour=_env_int("ORDERFLOW_MAX_ALERTS_PER_HOUR", 20),
         orderflow_min_grade=_env("ORDERFLOW_MIN_GRADE", "B").upper(),
-        orderflow_enable_equities=_env_bool("ORDERFLOW_ENABLE_EQUITIES", True),
-        equity_symbols=_env_list(
-            "EQUITY_SYMBOLS",
-            ("GOOGL", "TSLA", "AAPL", "MSFT", "NVDA", "AMZN", "META", "COIN", "HOOD", "SPCX", "CRCL", "MU", "SNDK"),
-        ),
-        equity_cache_ttl_sec=_env_int("EQUITY_CACHE_TTL_SEC", 21600),
-        equity_value_trigger_drawdown_pct=_env_float("EQUITY_VALUE_TRIGGER_DRAWDOWN_PCT", 25.0),
-        equity_value_trigger_from_52w_low_pct=_env_float("EQUITY_VALUE_TRIGGER_FROM_52W_LOW_PCT", 12.0),
         binance_news_enabled=_env_bool("BINANCE_NEWS_ENABLED", True),
         binance_news_max_age_hours=_env_int("BINANCE_NEWS_MAX_AGE_HOURS", 12),
         binance_news_limit_per_cycle=_env_int("BINANCE_NEWS_LIMIT_PER_CYCLE", 3),

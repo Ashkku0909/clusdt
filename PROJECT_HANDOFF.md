@@ -1,4 +1,4 @@
-# clusdt — Project Handoff (for another AI agent)
+﻿# clusdt — Project Handoff (for another AI agent)
 
 ## 1. What this project is
 A **paid Telegram channel bot** (`@MentalOutcrypto_bot`, chat `-1004424278724`) that pushes:
@@ -17,12 +17,12 @@ Local: Windows, Python 3.12 venv at `d:\github\clusdt\.venv`.
 - LLM (DeepSeek `deepseek-flash`) is used **only** for: news importance scoring, asset tagging, translation fallback, and equity narrative summarisation. It never invents prices/levels.
 - **Binance USDT-M public REST + WebSocket is the only market data source.** yfinance was fully removed.
 - **All subscriber-facing text is Simplified Chinese (zh-Hans, mainland vocabulary).** Formatters stay written in Traditional for readability, but `TelegramClient.send_alert()` converts every outgoing message via `zh_text.to_simplified_lines()` — one choke point, so no card can be missed.
-- One `OrderflowEngine` instance per symbol (23 engines, 23 WS connections), sharing one process-wide `RestGate` circuit breaker and one `AlertBudget`.
+- One `OrderflowEngine` instance per symbol (8 engines, 8 WS connections), sharing one process-wide `RestGate` circuit breaker and one `AlertBudget`.
 
 ## 3. Module map
 | File | Responsibility |
 |---|---|
-| `main.py` | CLI + FastAPI app (`/`, `/health`, `/status`), lifespan starts 23 engines, background worker thread runs news+CFTC every `LOOP_INTERVAL_SECONDS` (300s) |
+| `main.py` | CLI + FastAPI app (`/`, `/health`, `/status`), lifespan starts one engine per symbol (currently 8), background worker thread runs news+CFTC every `LOOP_INTERVAL_SECONDS` (300s) |
 | `binance_orderflow.py` | Core engine: WS ingestion, 5 signal types, grading gate, ATR-based levels, alert formatting, `RestGate`, baseline disk cache, CLIs (`--orderflow`, `--ws-test`, `--dump-baseline`) |
 | `market_context.py` | Multi-timeframe context: ADX(14) 15m/1h/4h/1d (Wilder), CVD from kline taker-buy, OI history 15m, funding rate; `grade_signal()` A/B/C scoring; disk cache |
 | `news_pipeline.py` | News fetch/dedupe/20-min window, whitelist gate, trafilatura scraping, translation chain, 3-line Telegram card |
@@ -33,18 +33,19 @@ Local: Windows, Python 3.12 venv at `d:\github\clusdt\.venv`.
 | `backtest.py` | VWAP σ strategy backtester with look-ahead/same-bar-fill/fee bias controls, walk-forward and sensitivity grid |
 | `binance_news.py` | Binance CMS announcements (`bapi/composite/v1/public/cms/article/list/query`, pageSize ≤ 20) |
 | `cftc_data.py` | Socrata dataset `72hh-3qpy`, contracts `067651` (WTI) / `06765T` (Brent), weekly Managed Money |
-| `equities.py` | Finnhub profile/quote/metrics/news → DeepSeek JSON brief (≤10 lines), 6h cache, gated by a deep-value trigger |
+| `equities.py` | *(deleted 2026-11-11)* Finnhub fundamentals → DeepSeek brief. It was never in the run loop and consumed zero production load; removed for clarity on request. |
 | `news_sources.py` | Finnhub, Al Jazeera RSS, Marketaux (30-min throttle), strict UTC timestamp parsing, `SOURCE_WHITELIST` |
 | `pipeline.py` | `run_full_cycle` = news + binance_news + cftc |
 | `state.py` | `data/state.json` sections: `news_seen`, `news_filtered`, `binance_news_seen`, `news_translations`, flags |
 | `telegram_dispatcher.py` / `telegram_client.py` | Markdown→HTML, 429 back-off, timeouts, Simplified conversion boundary |
 | `health.py` | `--health` connectivity check for all pipelines |
 | `analyse_symbol.py` | One-symbol structural dump (price/ATR/VWAP σ/frames/levels) for answering "hold, wait or exit?" |
-| `baseline_seed.json` | Committed snapshot of 24h high/low + 4h ATR for all 23 symbols (bootstraps a fresh deploy while REST is rate-limited) |
+| `baseline_seed.json` | Committed snapshot of 24h high/low + 4h ATR for all symbols (currently 8) (bootstraps a fresh deploy while REST is rate-limited) |
 | `config.py` | All settings, env-driven (`_env`, `_env_int`, `_env_float`, `_env_bool`, `_env_list`) |
 
 ## 4. Signal engine specifics
-**Symbols (23):** CLUSDT, BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, LINKUSDT, ENAUSDT, XAUUSDT, XAGUSDT, BNBUSDT, COINUSDT, HOODUSDT, SPCXUSDT, CRCLUSDT, MUUSDT, SNDKUSDT, NVDAUSDT, MSFTUSDT, AAPLUSDT, AMZNUSDT, METAUSDT, GOOGLUSDT, TSLAUSDT.
+**Symbols (8, liquid only):** BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT, XAUUSDT, XAGUSDT, CLUSDT.
+Cut from 23 on 2026-11-11 at subscriber request: only contracts above ~$600M/24h quote volume are kept, so fills are realistic and Render's 0.1 vCPU + REST budget is not spread over three times the symbols it should be. The retired list (equity perps, LINK, ENA) is kept in `config.RETIRED_SYMBOLS`; `BINANCE_SYMBOLS` overrides at any time.
 
 **Auto-calibrated thresholds** (per symbol):
 `window_usd = clamp(4.5 × 24hQuoteVolume / 5760, $100k, $12M)`; `block = 0.5×window`; `momentum = 2×window`; `absorption = divergence = 3×window`.
@@ -128,8 +129,13 @@ Context is cached to `data/context/{SYMBOL}.json` (6h) and reused during REST ou
 ## 8. Reliability design (hard-won)
 - **Binance quirk:** on this endpoint `@aggTrade`, `@ticker`, `@kline_*`, `@miniTicker`, `!ticker@arr`, `@markPrice` are **all silent** (verified against BTC control). Only `@trade` and `@bookTicker` deliver data. Never reintroduce ticker/kline streams for baselines.
 - **Baselines** (24h high/low + ATR) come from REST (`ticker/24hr` weight 1, `klines` weight 2), persisted to `data/baseline/{SYMBOL}.json`, and bootstrapped from `baseline_seed.json` on a fresh deploy.
+- **⚠ 2026-11-11 outage: the channel went dark for days and nobody noticed.** Two independent bugs stacked:
+  1. The committed seed was **10 days old** but its hard limit was 7 days → all symbols rejected → `missing_baseline` for every symbol → `process_trade` early-returns → **zero signals**, while `/status` still looked "alive" (WS 23/23, 2.1M trades).
+  2. Even when a valid seed existed, `_load_baseline()` `break`ed on the **first dict it found**. A 9-day-old disk cache would therefore shadow a fresh seed and yield `atr=None` → also zero signals.
+  Fixes: seed validity **7d → 30d**; seed older than `SEED_STALE_DAYS` (7) escalates `min_grade` to **A** instead of going blind; `_load_baseline()` now falls through to the next source when one yields nothing usable; the heartbeat logs at **ERROR** when *all* engines lack a baseline. Symptom to watch: `signals=0` with `missing_baseline` non-empty.
+- **Deploy hygiene:** every push re-opens the WS connections and re-fires REST refreshes, and wipes `data/`. If the committed seed is stale, a deploy during a ban leaves the bot fully blind. After changing symbol lists or config, prefer one deploy and then leave it alone.
 - **418/429 handling:** `RestGate` is process-wide; `parse_ban_seconds()` reads `banned until <epoch ms>`, all engines go silent until then, retries get jitter. Throttling must key off the *attempt* timestamp, never the success timestamp.
-- Render free tier = 0.1 CPU, **ephemeral disk**, **shared egress IP** → bans are largely other tenants' doing. Avoid rapid consecutive deploys (each restart re-opens 23 WS + REST refreshes).
+- Render free tier = 0.1 CPU, **ephemeral disk**, **shared egress IP** → bans are largely other tenants' doing. Avoid rapid consecutive deploys (each restart re-opens every WS connection + REST refresh).
 - `ORDERFLOW_SNAPSHOT_MAX_AGE_SEC = 10800` (3h) so long bans degrade gracefully instead of going silent.
 
 ## 9. Operations

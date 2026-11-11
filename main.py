@@ -37,6 +37,7 @@ from fastapi import FastAPI
 
 from binance_orderflow import (
     CONTEXT_HEALER,
+    SEED_STALE_DAYS,
     AlertBudget,
     OrderflowEngine,
     RestGate,
@@ -47,7 +48,6 @@ from binance_orderflow import (
 from binance_news import run_binance_news_cycle
 from cftc_data import run_cftc_cycle
 from config import BASE_DIR, Config, REQUIRED_FIELDS, load_config
-from equities import run_equity_cli
 from health import run_health
 from news_pipeline import run_news_cycle
 from pipeline import Tools, run_full_cycle
@@ -86,7 +86,7 @@ def _background_worker(interval: int) -> None:
             if _engines:
                 summary = _engine_summary()
                 log.info(
-                    "引擎心跳：WS %d/%d 已連線｜成交累計 %d 筆｜訊號累計 %d｜REST 熔斷剩餘 %.0f 秒%s",
+                    "引擎心跳：WS %d/%d 已連線｜成交累計 %d 筆｜訊號累計 %d｜REST 熔斷剩餘 %.0f 秒%s%s",
                     summary["ws_connected"],
                     summary["engines"],
                     summary["trades_total"],
@@ -97,7 +97,20 @@ def _background_worker(interval: int) -> None:
                         if summary["missing_baseline"]
                         else ""
                     ),
+                    (
+                        f"｜種子已 {summary['stale_seed_days']:.1f} 天（只發 A 級）"
+                        if summary["stale_seed_count"]
+                        else ""
+                    ),
                 )
+                # 全體缺基準＝完全不可能產生訊號。這是 2026-11-11 的事故型態：
+                # 沉默失敗讓頻道停了數天卻無人察覺，所以這裡必須升級成 ERROR。
+                if summary["engines"] and len(summary["missing_baseline"]) == summary["engines"]:
+                    log.error(
+                        "⛔ 全部 %d 個標的都缺基準，不可能產生任何訊號！"
+                        "請在有網路時執行 `python main.py --dump-baseline` 並提交種子檔",
+                        summary["engines"],
+                    )
         except Exception:
             log.exception("本輪執行失敗，將於下一輪重試")
         time.sleep(interval)
@@ -131,10 +144,20 @@ def _engine_summary() -> dict:
         if engine.snapshot is None or engine.atr is None
     ]
     gate_remaining = max((engine.gate.remaining() for engine in engines), default=0.0)
+    # 種子檔過期會讓門檻升到 A；把這件事顯示出來，否則「突然變很少訊號」無法解釋
+    stale_seed = [
+        engine.symbol
+        for engine in engines
+        if getattr(engine, "_seed_age_days", 0.0) > SEED_STALE_DAYS
+    ]
     return {
         "engines": len(engines),
         "ws_connected": connected,
         "missing_baseline": stale,
+        "stale_seed_count": len(stale_seed),
+        "stale_seed_days": round(
+            max((getattr(e, "_seed_age_days", 0.0) for e in engines), default=0.0), 1
+        ),
         "trades_total": sum(int(engine.stats["trades"]) for engine in engines),
         "signals_total": sum(int(engine.stats["signals"]) for engine in engines),
         "rest_blocked_sec": round(gate_remaining, 0),
@@ -153,12 +176,6 @@ async def _start_orderflow_engine() -> None:
     budget = AlertBudget(cfg.orderflow_max_alerts_per_hour)
     gate = RestGate()
     symbols = list(cfg.binance_symbols)
-    if not getattr(cfg, "orderflow_enable_equities", True):
-        equity_perps = {f"{code.upper()}USDT" for code in cfg.equity_symbols}
-        skipped = [code for code in symbols if code in equity_perps]
-        symbols = [code for code in symbols if code not in equity_perps]
-        if skipped:
-            log.info("股票永續已靜音（%d 個）：%s", len(skipped), ",".join(skipped))
     stagger = float(getattr(cfg, "orderflow_context_stagger_sec", 6.0))
     CONTEXT_HEALER.configure(float(getattr(cfg, "orderflow_heal_interval_sec", 8.0)))
     tasks: list[asyncio.Task] = []
@@ -294,13 +311,6 @@ def _parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--interval", type=int, default=300, help="--loop 的間隔秒數（預設 300）")
     parser.add_argument("--limit", type=int, default=None, help="每輪最多推播則數（預設讀 MAX_ALERTS_PER_RUN）")
     parser.add_argument("--symbol", default=None, help="只處理單一標的（如 BTCUSDT / CLUSDT）；預設讀 BINANCE_SYMBOLS 全部")
-    parser.add_argument(
-        "--equity",
-        nargs="*",
-        default=None,
-        metavar="SYMBOL",
-        help="股票基本面／新聞分析（預設讀 EQUITY_SYMBOLS；加 --force 同步推播 Telegram）",
-    )
     parser.add_argument("--dry-run", action="store_true", help="只顯示訊息，不實際發送、不更新狀態")
     parser.add_argument(
         "--verify-signals",
@@ -382,16 +392,6 @@ def main(argv=None) -> int:
         ok = tools.tg.send_alert(PING_MESSAGE, dry_run=args.dry_run)
         log.info("--ping %s", "完成" if ok else "失敗")
         return 0 if ok else 1
-
-    if args.equity is not None:
-        symbols = [item.upper() for item in args.equity] if args.equity else list(cfg.equity_symbols)
-        return run_equity_cli(
-            cfg,
-            symbols,
-            tools.tg if args.force else None,
-            dry_run=args.dry_run,
-            force=args.force,
-        )
 
     if args.verify_signals:
         from signal_ledger import main as ledger_main
