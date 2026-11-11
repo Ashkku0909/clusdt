@@ -15,6 +15,8 @@ import time
 
 import requests
 
+from zh_text import to_simplified_lines
+
 log = logging.getLogger(__name__)
 
 API_BASE = "https://api.telegram.org"
@@ -88,10 +90,15 @@ class TelegramClient:
 
     # ------------------------------------------------------------------ #
     def send_alert(self, markdown_text: str, dry_run: bool = False) -> bool:
-        """發送一則快報；回傳是否成功。dry_run 只印出內容。"""
+        """發送一則快報；回傳是否成功。dry_run 只印出內容。
+
+        所有卡片在這裡統一轉成簡體：卡片文字散落在多個模組，
+        在這裡轉一次才能保證不會漏改，且新增卡片自動套用。
+        """
         if not markdown_text.strip():
             log.error("空白訊息，略過推播")
             return False
+        markdown_text = to_simplified_lines(markdown_text)
         if dry_run:
             print("\n" + "─" * 56)
             print("[dry-run] 以下內容不會實際發送：")

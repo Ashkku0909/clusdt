@@ -109,7 +109,7 @@ class Config:
     # 即時新聞管線（零 LLM）
     news_max_age_minutes: int = 20
     article_paragraph_limit: int = 3
-    translate_target: str = "zh-TW"
+    translate_target: str = "zh-CN"
     mymemory_email: str = ""
     marketaux_min_interval_sec: int = 1800
     # Binance 即時訂單流（唯一權威市場資料源；零 LLM）

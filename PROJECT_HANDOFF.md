@@ -16,26 +16,31 @@ Local: Windows, Python 3.12 venv at `d:\github\clusdt\.venv`.
 - **Market signals are 100% deterministic. No LLM anywhere in the trading path.**
 - LLM (DeepSeek `deepseek-flash`) is used **only** for: news importance scoring, asset tagging, translation fallback, and equity narrative summarisation. It never invents prices/levels.
 - **Binance USDT-M public REST + WebSocket is the only market data source.** yfinance was fully removed.
+- **All subscriber-facing text is Simplified Chinese (zh-Hans, mainland vocabulary).** Formatters stay written in Traditional for readability, but `TelegramClient.send_alert()` converts every outgoing message via `zh_text.to_simplified_lines()` — one choke point, so no card can be missed.
 - One `OrderflowEngine` instance per symbol (23 engines, 23 WS connections), sharing one process-wide `RestGate` circuit breaker and one `AlertBudget`.
 
 ## 3. Module map
 | File | Responsibility |
 |---|---|
 | `main.py` | CLI + FastAPI app (`/`, `/health`, `/status`), lifespan starts 23 engines, background worker thread runs news+CFTC every `LOOP_INTERVAL_SECONDS` (300s) |
-| `binance_orderflow.py` | Core engine: WS ingestion, 4 signal types, grading gate, ATR-based levels, alert formatting, `RestGate`, baseline disk cache, CLIs (`--orderflow`, `--ws-test`, `--dump-baseline`) |
+| `binance_orderflow.py` | Core engine: WS ingestion, 5 signal types, grading gate, ATR-based levels, alert formatting, `RestGate`, baseline disk cache, CLIs (`--orderflow`, `--ws-test`, `--dump-baseline`) |
 | `market_context.py` | Multi-timeframe context: ADX(14) 15m/1h/4h/1d (Wilder), CVD from kline taker-buy, OI history 15m, funding rate; `grade_signal()` A/B/C scoring; disk cache |
-| `news_pipeline.py` | News fetch/dedupe/20-min window, trafilatura scraping, translation chain, Telegram formatting |
+| `news_pipeline.py` | News fetch/dedupe/20-min window, whitelist gate, trafilatura scraping, translation chain, 3-line Telegram card |
 | `news_importance.py` | DeepSeek JSON scoring 0–10 + category + affected symbols; `< NEWS_MIN_IMPORTANCE` filtered |
-| `llm_translate.py` | DeepSeek batch translator (`{"lines": [...]}`) used as fallback |
+| `llm_translate.py` | DeepSeek batch translator (`{"lines": [...]}`) used as fallback; targets Simplified Chinese |
+| `zh_text.py` | **Single-point Traditional→Simplified conversion** (OpenCC `t2s` + mainland vocabulary map), applied in `TelegramClient.send_alert` so every card is Simplified without touching each formatter |
+| `signal_ledger.py` | Records every dispatched card to `signals_ledger.json` and verifies outcomes against post-send 4H klines |
+| `backtest.py` | VWAP σ strategy backtester with look-ahead/same-bar-fill/fee bias controls, walk-forward and sensitivity grid |
 | `binance_news.py` | Binance CMS announcements (`bapi/composite/v1/public/cms/article/list/query`, pageSize ≤ 20) |
 | `cftc_data.py` | Socrata dataset `72hh-3qpy`, contracts `067651` (WTI) / `06765T` (Brent), weekly Managed Money |
-| `equities.py` | Finnhub profile/quote/metrics/news → DeepSeek JSON brief (≤10 lines), 6h cache |
-| `news_sources.py` | Finnhub, Al Jazeera RSS, Marketaux (30-min throttle), strict UTC timestamp parsing |
+| `equities.py` | Finnhub profile/quote/metrics/news → DeepSeek JSON brief (≤10 lines), 6h cache, gated by a deep-value trigger |
+| `news_sources.py` | Finnhub, Al Jazeera RSS, Marketaux (30-min throttle), strict UTC timestamp parsing, `SOURCE_WHITELIST` |
 | `pipeline.py` | `run_full_cycle` = news + binance_news + cftc |
 | `state.py` | `data/state.json` sections: `news_seen`, `news_filtered`, `binance_news_seen`, `news_translations`, flags |
-| `telegram_dispatcher.py` / `telegram_client.py` | Markdown→HTML, 429 back-off, timeouts |
+| `telegram_dispatcher.py` / `telegram_client.py` | Markdown→HTML, 429 back-off, timeouts, Simplified conversion boundary |
 | `health.py` | `--health` connectivity check for all pipelines |
-| `baseline_seed.json` | Committed snapshot of 24h high/low + 1h ATR for all 23 symbols (bootstraps a fresh deploy while REST is rate-limited) |
+| `analyse_symbol.py` | One-symbol structural dump (price/ATR/VWAP σ/frames/levels) for answering "hold, wait or exit?" |
+| `baseline_seed.json` | Committed snapshot of 24h high/low + 4h ATR for all 23 symbols (bootstraps a fresh deploy while REST is rate-limited) |
 | `config.py` | All settings, env-driven (`_env`, `_env_int`, `_env_float`, `_env_bool`, `_env_list`) |
 
 ## 4. Signal engine specifics
@@ -99,14 +104,18 @@ Context is cached to `data/context/{SYMBOL}.json` (6h) and reused during REST ou
 
 ## 6. News pipeline
 - Sources: Finnhub general news, Al Jazeera RSS, Google News feeds, Marketaux (throttled to one call / 30 min).
+- **Source whitelist (`news_sources.SOURCE_WHITELIST`) — only 4 outlets ship:** 路透社 / 彭博社 / 華爾街日報 / 半島電視台.
+  Matching is on the `source` string **or** the URL domain, and the display name is normalised to Chinese. Applied inside `collect_fresh()` **before** dedupe and before any article download, so filtered-out outlets cost zero requests. Subscribers asked for fewer, more credible items; aggregators, content farms and second-hand reposts were the main source of noise.
 - **News never feeds the trading engine.** It is a separate broadcast channel; no signal depends on it. So every unit of work here must justify itself.
 - **Cost order (cheap → expensive), enforced in `run_news_cycle`:**
   1. Parse the feed timestamp. Items outside the 20-minute window are dropped with **zero network calls**.
   2. Items with **no** timestamp are dropped (`NEWS_VERIFIABLE_TS_ONLY=1`). The old code fetched the article HTML just to read its `meta` tag — with ~140 items per cycle that was ~140 needless HTTP requests for articles that were almost all stale anyway.
   3. `headline_prefilter()` — free keyword gate that drops price-prediction / how-to / "top 10" / sponsored pieces.
   4. `score_news()` runs on **title + feed summary only** (`NEWS_SCORE_BEFORE_BODY=1`); the article body is fetched only for items that pass. Body scraping is additionally capped at `NEWS_MAX_SCRAPE_PER_CYCLE` (6).
-  5. Translation runs last, only for the single item actually being pushed.
-- Dedupe by URL/title hashes in `state.json`.
+  5. Translation runs last, only for the single item actually being pushed.- **News card is deliberately 3 lines:** `（來源）N 分鐘前` + blank + one paragraph. No header, no divider, no 重要性 score, no 影響標的, no separate 原文網址 line.
+  - The outlet name is wrapped as a Markdown link, so it *looks* like plain `（路透社）` but tapping it still reaches the source.
+  - `_has_incremental_body()` drops body paragraphs that merely repeat the title — Al Jazeera's RSS routinely returns the headline as paragraph 1, and the old card printed it twice (a direct cause of the "訊息量太雜" complaint).
+  - The 重要性 score and 影響標的 are still computed and still gate delivery; they are simply not shown, because showing a filter's own output is pure noise.- Dedupe by URL/title hashes in `state.json`.
 - **DeepSeek importance filter**: JSON `{score 0-10, category, reason, symbols}`, threshold 6; fail-open.
 - **Translation chain**: Google (deep-translator) → **DeepSeek batch** → MyMemory (last resort). Translation cache in `state["news_translations"]` (800 entries).
 - Google's free endpoint and MyMemory share the same upstream quota and both return `You made too many requests …`; that is expected, DeepSeek covers it. With the 20-minute window, `抓到 141 則 / 窗內 0 則` is the normal steady state.

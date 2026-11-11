@@ -44,6 +44,8 @@ services:
         value: "3"
       - key: NEWS_MAX_AGE_MINUTES
         value: "20"
+      - key: TRANSLATE_TARGET
+        value: "zh-CN"
       - key: BINANCE_SYMBOL
         value: "CLUSDT"
       - key: BINANCE_SYMBOLS

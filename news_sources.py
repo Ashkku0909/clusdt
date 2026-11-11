@@ -303,6 +303,54 @@ def fetch_finnhub(cfg: Config) -> list[NewsItem]:
 
 
 # --------------------------------------------------------------------- #
+# 來源白名單（訂閱者指定：只保留這四家）
+# --------------------------------------------------------------------- #
+# 為什麼要白名單：
+#   訂閱者明確表示「訊息量太雜」。Finnhub／Marketaux 會混入大量聚合站、
+#   內容農場與二手轉載，這些來源對交易決策沒有增量價值，只會稀釋可信度。
+#   只保留一線通訊社，寧可少發也不要吵。
+# 每一項：(顯示名稱, 來源字串比對關鍵字, 網域比對關鍵字)
+SOURCE_WHITELIST = (
+    ("路透社", ("reuters",), ("reuters.com", "reuters.tv")),
+    ("彭博社", ("bloomberg",), ("bloomberg.com", "bloomberg.co.jp")),
+    (
+        "華爾街日報",
+        ("wall street journal", "wsj", "dow jones"),
+        ("wsj.com", "dowjones.com", "barrons.com"),
+    ),
+    ("半島電視台", ("al jazeera", "aljazeera"), ("aljazeera.com", "aljazeera.net")),
+)
+
+
+def source_label(source: str, url: str = "") -> str | None:
+    """回傳白名單內的標準中文名稱；不在名單內回傳 None。
+
+    同時比對來源字串與網域：聚合 API 的 ``source`` 欄位常常只寫品牌名，
+    但網域是更難造假的特徵，兩者任一命中即視為可信來源。
+    """
+    source_text = (source or "").strip().lower()
+    url_text = (url or "").strip().lower()
+    for label, source_keys, domain_keys in SOURCE_WHITELIST:
+        if any(key in source_text for key in source_keys):
+            return label
+        if any(key in url_text for key in domain_keys):
+            return label
+    return None
+
+
+def filter_whitelisted(items: list[NewsItem]) -> list[NewsItem]:
+    """只保留白名單來源，並把 ``source`` 正規化成中文名稱（供卡片顯示）。"""
+    kept: list[NewsItem] = []
+    for item in items:
+        label = source_label(item.source, item.url)
+        if label is None:
+            continue
+        item.source = label
+        kept.append(item)
+    return kept
+
+
+# --------------------------------------------------------------------- #
 # 來源三：Al Jazeera English（RSS，聚焦中東地緣與能源供給風險）
 # --------------------------------------------------------------------- #
 ALJAZEERA_RSS_URLS = (

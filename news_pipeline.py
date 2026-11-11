@@ -33,9 +33,11 @@ from news_sources import (
     fetch_finnhub,
     fetch_marketaux,
     fetch_url_html,
+    filter_whitelisted,
     parse_iso_utc,
+    source_label,
 )
-from news_importance import assets_label, category_label, score_news
+from news_importance import category_label, score_news
 from llm_translate import translate_lines
 from state import StateStore
 
@@ -164,7 +166,17 @@ def collect_fresh(cfg: Config, state: StateStore, persist: bool = True) -> list[
             log.warning("Marketaux 抓取失敗：%s", exc)
     else:
         log.info("Marketaux 節流中（距上次 %.0f 秒 < %d 秒），本輪略過", elapsed, cfg.marketaux_min_interval_sec)
-    return items
+
+    # 來源白名單：只留路透／彭博／WSJ／半島。必須在去重與抓全文之前就過濾，
+    # 否則會對永遠不會被推播的文章做無謂的下載與評分。
+    kept = filter_whitelisted(items)
+    if len(kept) != len(items):
+        log.info(
+            "來源白名單：%d 則中保留 %d 則（路透／彭博／華爾街日報／半島電視台）",
+            len(items),
+            len(kept),
+        )
+    return kept
 
 
 def _float_or_zero(value) -> float:
@@ -513,6 +525,23 @@ def translate_batch(texts: list[str], cfg: Config) -> list[str | None]:
 # --------------------------------------------------------------------- #
 # 格式化與推播
 # --------------------------------------------------------------------- #
+def _has_incremental_body(title_zh: str, paragraphs_zh: list[str]) -> str:
+    """取一句「比標題多講了東西」的內文；與標題重複的直接丟棄。
+
+    半島電視台的 RSS 常見問題：第一段內文就是標題原句，舊卡片因此把同一句
+    話顯示兩次——這正是訂閱者反饋「訊息量太雜」的來源之一。
+    """
+    for para in paragraphs_zh:
+        text = (para or "").strip()
+        if not text:
+            continue
+        head = text[:40]
+        if head and (head in title_zh or (len(title_zh) >= 12 and title_zh[:12] in text[:80])):
+            continue
+        return _trim_chinese_to_sentence(text, 70)
+    return ""
+
+
 def format_news_alert(
     item: NewsItem,
     published: datetime,
@@ -521,28 +550,38 @@ def format_news_alert(
     paragraphs_zh: list[str],
     verdict=None,
 ) -> str:
-    local_time = published.astimezone(LOCAL_TZ).strftime("%H:%M")
-    stamp = f"{int(age_minutes)} 分鐘前 ({local_time} 本地時間)"
-    body = "\n\n".join(paragraphs_zh) if paragraphs_zh else "[無法擷取內文]"
-    lines = [
-        "⚡ **【原油即時快訊】**",
-        "━━━━━━━━━━━━━━━━━━",
-        f"📰 **標題**: {title_zh}",
-        f"🌐 **來源**: {item.source} ｜ 🕒 **發布**: {stamp}",
-    ]
-    if verdict is not None:
-        line = f"🎯 **重要性**: {verdict.score}/10（{category_label(verdict.category)}）"
-        if getattr(verdict, "symbols", ()):
-            line += f" ｜ 影響: {assets_label(verdict.symbols)}"
-        lines.append(line)
-    lines += [
-        "",
-        "📝 **內文快讀 (中譯)**:",
-        body,
-        "",
-        f"🔗 **原文網址**: {item.url}",
-        "━━━━━━━━━━━━━━━━━━",
-    ]
+    """精簡快訊卡：只有（來源）時間 + 內容。
+
+    訂閱者回饋：資訊量太雜。舊版有標題／來源／發布／重要性／影響標的／內文
+    ／原文網址七行，但「重要性」與「影響標的」本身就是推播前的過濾條件，
+    再顯示一次只是噪音；來源標題重複時更是浪費版面。
+
+    來源做成超連結後，畫面與「（路透社）16 分鐘前」完全一致，
+    但點一下仍可回到原文核實，不需要額外一行網址。
+    """
+    label = source_label(item.source, item.url) or (item.source or "未知來源")
+    minutes = max(0, int(round(age_minutes)))
+    when = f"{minutes} 分鐘前" if minutes < 60 else f"{minutes // 60} 小時前"
+    header = f"（[{label}]({item.url})）{when}"
+
+    title = (title_zh or "").strip()
+    for tail in ("。", "．", "."):
+        if title.endswith(tail):
+            title = title[: -len(tail)].rstrip()
+            break
+
+    body = _has_incremental_body(title, paragraphs_zh)
+    if body:
+        content = f"{title}；{body}"
+    else:
+        content = title
+    if content and not content.endswith(("。", "！", "？", "…", "!", "?")):
+        content += "。"
+
+    lines = [header]
+    if content:
+        lines.append("")
+        lines.append(content)
     return "\n".join(lines)
 
 
