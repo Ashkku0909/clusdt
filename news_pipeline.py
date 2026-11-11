@@ -54,6 +54,7 @@ MARKETAUX_THROTTLE_FLAG = "news:marketaux:last_fetch"
 PARAGRAPH_MIN_CHARS = 60
 TRANSLATE_MAX_CHARS = 1500  # 單次翻譯長度上限（免費端點保護）
 SUMMARY_MAX_CHARS = 280  # 內文快讀中譯上限（避免截到半句）
+CONTENT_MAX_CHARS = 64  # 單則快訊「標題＋內文」總長上限：一則就是一口氣讀完
 SENTENCE_ENDS = ".!?"
 SENTENCE_ENDS_ZH = "。！？」』…"
 
@@ -525,12 +526,28 @@ def translate_batch(texts: list[str], cfg: Config) -> list[str | None]:
 # --------------------------------------------------------------------- #
 # 格式化與推播
 # --------------------------------------------------------------------- #
-def _has_incremental_body(title_zh: str, paragraphs_zh: list[str]) -> str:
+def _first_sentence(text: str) -> str:
+    """取第一個完整句子（含句末標點）；沒有標點就整段回傳。"""
+    cleaned = (text or "").strip()
+    end = -1
+    for mark in SENTENCE_ENDS_ZH:
+        pos = cleaned.find(mark)
+        if pos != -1 and (end == -1 or pos < end):
+            end = pos
+    return cleaned[: end + 1].strip() if end >= 0 else cleaned
+
+
+def _has_incremental_body(title_zh: str, paragraphs_zh: list[str], budget: int = 70) -> str:
     """取一句「比標題多講了東西」的內文；與標題重複的直接丟棄。
 
     半島電視台的 RSS 常見問題：第一段內文就是標題原句，舊卡片因此把同一句
     話顯示兩次——這正是訂閱者反饋「訊息量太雜」的來源之一。
+
+    寧可只顯示標題，也不把句子切成半句：
+    只取「第一個完整句子」，放得進 budget 才加，放不進就什麼都不加。
     """
+    if budget < 12:
+        return ""
     for para in paragraphs_zh:
         text = (para or "").strip()
         if not text:
@@ -538,7 +555,10 @@ def _has_incremental_body(title_zh: str, paragraphs_zh: list[str]) -> str:
         head = text[:40]
         if head and (head in title_zh or (len(title_zh) >= 12 and title_zh[:12] in text[:80])):
             continue
-        return _trim_chinese_to_sentence(text, 70)
+        sentence = _first_sentence(text)
+        if len(sentence) <= budget:
+            return sentence
+        return ""
     return ""
 
 
@@ -570,7 +590,9 @@ def format_news_alert(
             title = title[: -len(tail)].rstrip()
             break
 
-    body = _has_incremental_body(title, paragraphs_zh)
+    body = _has_incremental_body(
+        title, paragraphs_zh, budget=max(12, CONTENT_MAX_CHARS - len(title) - 1)
+    )
     if body:
         content = f"{title}；{body}"
     else:
